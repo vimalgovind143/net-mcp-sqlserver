@@ -1,0 +1,26 @@
+name: .NET Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK (including previews)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          include-prerelease: true
+
+      - name: Restore
+        run: dotnet restore SqlServerMcpServer/SqlServerMcpServer.csproj
+
+      - name: Build
+        run: dotnet build SqlServerMcpServer/SqlServerMcpServer.csproj --configuration Release --no-restore

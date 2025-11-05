@@ -11,6 +11,11 @@ A Model Context Protocol (MCP) server that provides tools for interacting with M
 - **List Tables**: Get all tables in the current database with row counts
 - **Get Table Schema**: Retrieve column information for specific tables
 - **Connection Info**: Display current database connection status
+- **Stored Procedures**: List stored procedures with schema and dates
+- **Health Check**: Verify connectivity and view server properties
+- **Structured Logging**: JSON logs to stderr with correlation IDs and timings
+ - **Serilog Integration**: Structured logging via Serilog with JSON formatting
+ - **Row Limit Enforcement**: Max 100 rows returned per query
 
 ## 🔒 Security Features
 
@@ -23,7 +28,10 @@ This MCP server is designed with **read-only security** to prevent accidental da
 - ❌ EXEC/EXECUTE stored procedures
 - ❌ GRANT, REVOKE, DENY permissions
 - ❌ BULK operations
+- ❌ SELECT INTO (object creation)
+- ❌ Multiple statements in a single request
 - ❌ Any non-SELECT statements
+ - ❌ USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, sp_configure
 
 ### **Allowed Operations:**
 - ✅ SELECT queries for data retrieval
@@ -38,7 +46,7 @@ When a blocked operation is attempted, the server provides clear, specific error
 ```
 
 ### **Additional Safety Features:**
-- Query timeout protection (30 seconds)
+- Query timeout protection (configurable, default 30 seconds)
 - Input validation and sanitization
 - Detailed error reporting with helpful guidance
 - Security mode indicators in all responses
@@ -92,6 +100,8 @@ dotnet build
 
 ### Configuration
 
+Configuration values can be provided via environment variables or `appsettings.json`. Environment variables take precedence.
+
 Set the connection string using an environment variable:
 
 ```bash
@@ -109,6 +119,34 @@ export SQLSERVER_CONNECTION_STRING="Server=your_server;Database=your_database;Us
 ```
 Server=localhost;Database=master;Trusted_Connection=true;TrustServerCertificate=true;
 ```
+
+You can also configure the SQL command timeout (in seconds):
+
+```bash
+# Windows
+set SQLSERVER_COMMAND_TIMEOUT=60
+
+# PowerShell
+$env:SQLSERVER_COMMAND_TIMEOUT=60
+
+# Linux/macOS
+export SQLSERVER_COMMAND_TIMEOUT=60
+```
+
+If not set, the timeout defaults to `30` seconds.
+
+Alternatively, you can configure via `appsettings.json` placed alongside the executable or under the project directory:
+
+```
+{
+  "SqlServer": {
+    "ConnectionString": "Server=localhost;Database=master;Trusted_Connection=true;TrustServerCertificate=true;",
+    "CommandTimeout": 30
+  }
+}
+```
+
+Precedence: `Environment variables` → `appsettings.json` → built-in defaults.
 
 ### Running the Server
 
@@ -167,11 +205,16 @@ Execute a SQL query on the current database.
 
 **Parameters:**
 - `query` (string): The SQL query to execute
+ - `maxRows` (int, optional): Requested rows (defaults to 100; clamped to 100)
 
 **Example Usage:**
 ```
 Please execute "SELECT TOP 10 * FROM Users ORDER BY CreatedDate DESC" and show me the results
 ```
+
+Notes:
+- The server enforces a hard cap of 100 rows per query. Any higher request is clamped to 100.
+- The server safely injects `TOP <N>` after the first `SELECT` when absent, and caps an existing `TOP` if it exceeds 100.
 
 ### 5. GetTables
 Get a list of all tables in the current database with row counts.
@@ -194,6 +237,29 @@ Get the schema information for a specific table.
 ```
 Get the schema for the Users table
 ```
+
+### 7. GetStoredProcedures
+Get a list of stored procedures in the current database.
+
+**Parameters:** None
+
+**Example Usage:**
+```
+List all stored procedures
+```
+
+### 8. GetServerHealth
+Check connectivity and return server properties.
+
+**Parameters:** None
+
+**Example Usage:**
+```
+Check server health and show properties
+```
+Returns:
+- `server_name`, `product_version`, `product_level`, `edition`, `current_database`, `server_time`
+- Status and connectivity indicators
 
 ## Connection String Examples
 
@@ -264,3 +330,27 @@ To test the server locally:
 ## License
 
 This project is provided as-is for educational and development purposes.
+## Logging
+
+This project uses Serilog for structured logging.
+
+- Default sink: JSON logs written to `stderr` (non-interfering with MCP stdio)
+- Log content: start/end events with `correlation_id`, `operation`, `elapsed_ms`, plus error details
+- Configuration: Serilog reads settings from `appsettings.json` if present
+
+Example `appsettings.json` Serilog block:
+```
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "System": "Warning"
+      }
+    }
+  }
+}
+```
+
+Logs can be consumed directly from `stderr` or redirected as needed by your host environment.
