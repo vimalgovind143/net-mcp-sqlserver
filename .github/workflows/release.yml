@@ -1,0 +1,171 @@
+name: Build and Release
+
+on:
+  # Build on every PR to main for validation
+  pull_request:
+    branches: [ main ]
+  
+  # Build on push to main or tags
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  # Job 1: Build and test on PR and main push
+  build:
+    name: Build and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          include-prerelease: true
+
+      - name: Restore dependencies
+        run: dotnet restore SqlServerMcpServer/SqlServerMcpServer.csproj
+
+      - name: Build
+        run: dotnet build SqlServerMcpServer/SqlServerMcpServer.csproj --configuration Release --no-restore
+
+      - name: Test (if tests exist)
+        run: dotnet test --configuration Release --no-build --verbosity normal
+        continue-on-error: true
+
+  # Job 2: Create release with binaries (only on tag push)
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          include-prerelease: true
+
+      # Build for Windows x64
+      - name: Publish Windows x64
+        run: |
+          dotnet publish SqlServerMcpServer/SqlServerMcpServer.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained true \
+            /p:PublishSingleFile=true \
+            /p:IncludeNativeLibrariesForSelfExtract=true \
+            -o ./publish/win-x64
+
+      # Build for Linux x64
+      - name: Publish Linux x64
+        run: |
+          dotnet publish SqlServerMcpServer/SqlServerMcpServer.csproj \
+            -c Release \
+            -r linux-x64 \
+            --self-contained true \
+            /p:PublishSingleFile=true \
+            /p:IncludeNativeLibrariesForSelfExtract=true \
+            -o ./publish/linux-x64
+
+      # Build for macOS x64
+      - name: Publish macOS x64
+        run: |
+          dotnet publish SqlServerMcpServer/SqlServerMcpServer.csproj \
+            -c Release \
+            -r osx-x64 \
+            --self-contained true \
+            /p:PublishSingleFile=true \
+            /p:IncludeNativeLibrariesForSelfExtract=true \
+            -o ./publish/osx-x64
+
+      # Build for macOS ARM64 (Apple Silicon)
+      - name: Publish macOS ARM64
+        run: |
+          dotnet publish SqlServerMcpServer/SqlServerMcpServer.csproj \
+            -c Release \
+            -r osx-arm64 \
+            --self-contained true \
+            /p:PublishSingleFile=true \
+            /p:IncludeNativeLibrariesForSelfExtract=true \
+            -o ./publish/osx-arm64
+
+      # Package binaries
+      - name: Package Windows Binary
+        run: |
+          cd ./publish/win-x64
+          zip -r ../../SqlServerMcpServer-win-x64.zip *
+          cd ../..
+
+      - name: Package Linux Binary
+        run: |
+          cd ./publish/linux-x64
+          tar -czf ../../SqlServerMcpServer-linux-x64.tar.gz *
+          cd ../..
+
+      - name: Package macOS x64 Binary
+        run: |
+          cd ./publish/osx-x64
+          tar -czf ../../SqlServerMcpServer-osx-x64.tar.gz *
+          cd ../..
+
+      - name: Package macOS ARM64 Binary
+        run: |
+          cd ./publish/osx-arm64
+          tar -czf ../../SqlServerMcpServer-osx-arm64.tar.gz *
+          cd ../..
+
+      # Extract version from tag
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      # Create GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: SQL Server MCP Server v${{ steps.get_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            SqlServerMcpServer-win-x64.zip
+            SqlServerMcpServer-linux-x64.tar.gz
+            SqlServerMcpServer-osx-x64.tar.gz
+            SqlServerMcpServer-osx-arm64.tar.gz
+          body: |
+            ## SQL Server MCP Server v${{ steps.get_version.outputs.VERSION }}
+            
+            ### 🚀 Features
+            - Read-only SQL Server MCP server
+            - Dynamic database switching
+            - Structured logging with Serilog
+            - Cross-platform support
+            
+            ### 📦 Downloads
+            - **Windows**: `SqlServerMcpServer-win-x64.zip`
+            - **Linux**: `SqlServerMcpServer-linux-x64.tar.gz`
+            - **macOS (Intel)**: `SqlServerMcpServer-osx-x64.tar.gz`
+            - **macOS (Apple Silicon)**: `SqlServerMcpServer-osx-arm64.tar.gz`
+            
+            ### 📖 Installation
+            1. Download the appropriate binary for your platform
+            2. Extract the archive
+            3. Configure your connection string (see README.md)
+            4. Run the executable
+            
+            ### 🔗 Documentation
+            See [README.md](https://github.com/${{ github.repository }}/blob/main/SqlServerMcpServer/README.md) for full documentation.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
