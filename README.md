@@ -225,6 +225,32 @@ Notes:
 - The server enforces a hard cap of 100 rows per query. Any higher request is clamped to 100.
 - The server safely injects `TOP <N>` after the first `SELECT` when absent, and caps an existing `TOP` if it exceeds 100.
 
+### 5. ReadQuery (SRS)
+Execute a read-only T-SQL query with result formatting, per-call timeout, and parameter binding. Matches the SRS `read_query` specification.
+
+**Parameters:**
+- `query` (string, required): T-SQL `SELECT` statement
+- `timeout` (int, optional): Per-call timeout in seconds; default 30; clamped 1–300
+- `max_rows` (int, optional): Requested max rows; default 1000; clamped 1–10,000
+- `format` (string, optional): `json` | `csv` | `table` (HTML); default `json`
+- `parameters` (object, optional): Named parameters to bind (e.g., `{ id: 42 }`); keys may include or omit `@`
+- `delimiter` (string, optional): CSV delimiter; default `,`; use `tab` or `\t` for tab
+
+**Behavior:**
+- Enforces read-only validation (SELECT-only, blocks DDL/DML/EXEC and multiple statements)
+- Applies per-call timeout if provided; otherwise uses server default
+- Injects or caps `TOP <N>` to respect `max_rows`
+- Returns:
+  - `json`: array of objects with explicit `null` values
+  - `csv`: CSV string with header row and proper quoting
+  - `table`: escaped HTML table with headers
+- Includes `elapsed_ms`, `row_count`, and `columns` metadata (`name`, `data_type`, `allow_null`, `size`)
+
+**Example Usage:**
+```
+ReadQuery query="SELECT * FROM Orders WHERE CustomerID = @id ORDER BY CreatedAt DESC" parameters={"id": 123} max_rows=500 format=csv delimiter="," timeout=60
+```
+
 ### 5. GetTables
 Get a list of all tables in the current database with row counts.
 
