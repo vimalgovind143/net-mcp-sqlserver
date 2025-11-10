@@ -18,10 +18,10 @@ namespace SqlServerMcpServer.Operations
         [McpServerTool, Description("Check connection health and server info")]
         public static async Task<string> GetServerHealthAsync()
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("GetServerHealth");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
@@ -64,11 +64,21 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetServerHealth", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetServerHealth");
+                LoggingHelper.LogEnd(Guid.Empty, "GetServerHealth", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetServerHealth", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetServerHealth", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetServerHealth");
+                LoggingHelper.LogEnd(Guid.Empty, "GetServerHealth", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -79,8 +89,8 @@ namespace SqlServerMcpServer.Operations
         [McpServerTool, Description("Get current database connection info")]
         public static string GetCurrentDatabase()
         {
-            var corr = LoggingHelper.LogStart("GetCurrentDatabase");
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            var corr = LoggingHelper.LogStart("GetCurrentDatabase");
 
             try
             {
@@ -109,7 +119,7 @@ namespace SqlServerMcpServer.Operations
                 sw.Stop();
                 LoggingHelper.LogEnd(corr, "GetCurrentDatabase", false, sw.ElapsedMilliseconds, ex.Message);
 
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetCurrentDatabase", 
+                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetCurrentDatabase",
                     $"Failed to retrieve current database information: {ex.Message}");
                 return ResponseFormatter.ToJson(errorPayload);
             }
@@ -123,11 +133,27 @@ namespace SqlServerMcpServer.Operations
         [McpServerTool, Description("Switch to a different database on the same server")]
         public static string SwitchDatabase([Description("The name of the database to switch to")] string databaseName)
         {
-            var corr = LoggingHelper.LogStart("SwitchDatabase", databaseName);
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            var corr = LoggingHelper.LogStart("SwitchDatabase", databaseName);
 
             try
             {
+                // Validate parameter
+                if (string.IsNullOrWhiteSpace(databaseName))
+                {
+                    sw.Stop();
+                    var validationContext = new ErrorContext(
+                        ErrorCode.InvalidParameter,
+                        "Database name cannot be empty or whitespace",
+                        "SwitchDatabase"
+                    );
+                    validationContext.TroubleshootingSteps.Add("Provide a valid database name");
+                    validationContext.SuggestedFixes.Add("Use GetDatabases to list available databases");
+                    LoggingHelper.LogEnd(corr, "SwitchDatabase", false, sw.ElapsedMilliseconds, "Invalid parameter: empty database name");
+                    var response = ResponseFormatter.CreateErrorContextResponse(validationContext, sw.ElapsedMilliseconds);
+                    return ResponseFormatter.ToJson(response);
+                }
+
                 SqlConnectionManager.SwitchDatabase(databaseName);
 
                 sw.Stop();
@@ -143,14 +169,34 @@ namespace SqlServerMcpServer.Operations
                 };
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "SwitchDatabase");
+
+                // Add database-specific context
+                if (sqlEx.Number == 911 || sqlEx.Number == 4060)
+                {
+                    context.SuggestedFixes.Add($"Verify that database '{databaseName}' exists on this server");
+                    context.SuggestedFixes.Add("Use GetDatabases tool to see available databases");
+                }
+                else if (sqlEx.Number == 18456)
+                {
+                    context.SuggestedFixes.Add("Check your connection credentials and database permissions");
+                }
+
+                LoggingHelper.LogEnd(corr, "SwitchDatabase", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
                 sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "SwitchDatabase");
+                context.SuggestedFixes.Add("Ensure the database name is valid and you have access permissions");
                 LoggingHelper.LogEnd(corr, "SwitchDatabase", false, sw.ElapsedMilliseconds, ex.Message);
-
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("SwitchDatabase", 
-                    $"Failed to switch to database {databaseName}: {ex.Message}");
-                return ResponseFormatter.ToJson(errorPayload);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -169,11 +215,11 @@ namespace SqlServerMcpServer.Operations
             [Description("Filter by database state: 'ONLINE', 'OFFLINE', or 'ALL' (default: 'ONLINE')")] string? stateFilter = "ONLINE",
             [Description("Filter by database name (partial match, optional)")] string? nameFilter = null)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("GetDatabases", $"includeSystem:{includeSystemDatabases}, minSize:{minSizeMB}, state:{stateFilter}, name:{nameFilter}");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                
+
                 // Validate state filter
                 stateFilter = stateFilter?.ToUpperInvariant() ?? "ONLINE";
                 if (!new[] { "ONLINE", "OFFLINE", "ALL" }.Contains(stateFilter))
@@ -186,17 +232,17 @@ namespace SqlServerMcpServer.Operations
 
                 // Build dynamic WHERE clause
                 var whereConditions = new List<string>();
-                
+
                 if (!includeSystemDatabases)
                 {
                     whereConditions.Add("d.name NOT IN ('master', 'tempdb', 'model', 'msdb')");
                 }
-                
+
                 if (minSizeMB.HasValue && minSizeMB.Value > 0)
                 {
                     whereConditions.Add("SUM(mf.size * 8.0 / 1024) >= @minSizeMB");
                 }
-                
+
                 if (stateFilter != "ALL")
                 {
                     whereConditions.Add("d.state_desc = @stateFilter");
@@ -210,7 +256,7 @@ namespace SqlServerMcpServer.Operations
                 var whereClause = whereConditions.Count > 0 ? "WHERE " + string.Join(" AND ", whereConditions) : "";
 
                 var query = $@"
-                    SELECT 
+                    SELECT
                         d.name AS database_name,
                         d.database_id,
                         d.create_date,
@@ -223,24 +269,24 @@ namespace SqlServerMcpServer.Operations
                         SUM(mf.size * 8.0 / 1024) AS size_mb,
                         CASE WHEN d.name = @CurrentDb THEN 1 ELSE 0 END AS is_current,
                         (
-                            SELECT COUNT(*) 
-                            FROM sys.tables t 
+                            SELECT COUNT(*)
+                            FROM sys.tables t
                             WHERE t.object_id > 255 -- Exclude system tables
                         ) AS table_count,
                         (
-                            SELECT COUNT(*) 
-                            FROM sys.views v 
+                            SELECT COUNT(*)
+                            FROM sys.views v
                             WHERE v.object_id > 255
                         ) AS view_count,
                         (
-                            SELECT COUNT(*) 
-                            FROM sys.procedures p 
+                            SELECT COUNT(*)
+                            FROM sys.procedures p
                             WHERE p.object_id > 255
                         ) AS stored_procedure_count
                     FROM sys.databases d
                     LEFT JOIN sys.master_files mf ON d.database_id = mf.database_id
                     {whereClause}
-                    GROUP BY d.name, d.database_id, d.create_date, d.state_desc, 
+                    GROUP BY d.name, d.database_id, d.create_date, d.state_desc,
                              d.recovery_model_desc, d.compatibility_level, d.collation_name,
                              d.is_read_only, d.user_access_desc
                     ORDER BY d.name";
@@ -250,7 +296,7 @@ namespace SqlServerMcpServer.Operations
                     CommandTimeout = SqlConnectionManager.CommandTimeout
                 };
                 command.Parameters.AddWithValue("@CurrentDb", SqlConnectionManager.CurrentDatabase);
-                
+
                 if (minSizeMB.HasValue)
                     command.Parameters.AddWithValue("@minSizeMB", minSizeMB.Value);
                 if (stateFilter != "ALL")
@@ -295,7 +341,7 @@ namespace SqlServerMcpServer.Operations
                 try
                 {
                     var backupQuery = @"
-                        SELECT 
+                        SELECT
                             database_name,
                             MAX(backup_finish_date) AS last_backup_date,
                             type AS backup_type
@@ -308,7 +354,7 @@ namespace SqlServerMcpServer.Operations
                     {
                         CommandTimeout = SqlConnectionManager.CommandTimeout
                     };
-                    
+
                     using var backupReader = await backupCommand.ExecuteReaderAsync();
                     while (await backupReader.ReadAsync())
                     {
@@ -317,18 +363,22 @@ namespace SqlServerMcpServer.Operations
                         {
                             backupInfo[dbName] = new Dictionary<string, object>();
                         }
-                        
+
                         var backupType = backupReader["backup_type"].ToString();
                         var backupDate = backupReader["last_backup_date"];
-                        
-                        ((Dictionary<string, object>)backupInfo[dbName])[backupType] = 
+
+                        ((Dictionary<string, object>)backupInfo[dbName])[backupType] =
                             backupDate is DBNull ? null : backupDate;
                     }
                 }
-                catch
+                catch (Exception backupEx)
                 {
-                    // Backup information might not be accessible
+                    // Backup information might not be accessible - log but continue
+                    var backupContext = ErrorHelper.CreateErrorContextFromException(backupEx, "GetDatabases_BackupInfo");
+                    LoggingHelper.LogEnd(Guid.Empty, "GetDatabases_BackupInfo", false, 0, backupEx.Message);
                     backupInfo["error"] = "Backup information not available";
+                    backupInfo["error_details"] = backupEx.Message;
+                    // Continue processing without backup information
                 }
 
                 // Add backup info to databases
@@ -373,11 +423,36 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetDatabases", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetDatabases");
+
+                // Add context-specific guidance for database listing
+                if (sqlEx.Number == 911 || sqlEx.Number == 4060)
+                {
+                    context.SuggestedFixes.Add("Verify you have SELECT permissions on sys.databases");
+                    context.SuggestedFixes.Add("Check that the master database is accessible");
+                }
+                else if (sqlEx.Number == 229)
+                {
+                    context.SuggestedFixes.Add("Request VIEW SERVER STATE permission from your administrator");
+                }
+
+                LoggingHelper.LogEnd(Guid.Empty, "GetDatabases", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetDatabases", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetDatabases", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetDatabases");
+                context.SuggestedFixes.Add("Verify connection to SQL Server is active");
+                context.SuggestedFixes.Add("Check that you have permission to enumerate databases");
+
+                LoggingHelper.LogEnd(Guid.Empty, "GetDatabases", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
     }

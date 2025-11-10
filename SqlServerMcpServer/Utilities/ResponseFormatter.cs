@@ -9,6 +9,42 @@ namespace SqlServerMcpServer.Utilities
     public static class ResponseFormatter
     {
         /// <summary>
+        /// Creates an error response from ErrorContext
+        /// </summary>
+        /// <param name="context">The error context</param>
+        /// <param name="executionTimeMs">Execution time in milliseconds</param>
+        /// <returns>Standard error response object</returns>
+        public static object CreateErrorContextResponse(ErrorContext context, long executionTimeMs = 0)
+        {
+            return new
+            {
+                server_name = SqlConnectionManager.ServerName,
+                environment = SqlConnectionManager.Environment,
+                database = SqlConnectionManager.CurrentDatabase,
+                operation = context.Operation,
+                timestamp = DateTimeOffset.UtcNow,
+                execution_time_ms = executionTimeMs,
+                security_mode = "READ_ONLY_ENFORCED",
+                error = new
+                {
+                    code = context.Code.GetDescription(),
+                    message = context.Message,
+                    sql_error = context.SqlErrorNumber.HasValue ? new
+                    {
+                        error_number = context.SqlErrorNumber,
+                        line_number = context.SqlErrorLineNumber
+                    } : null,
+                    can_retry = context.CanRetry(),
+                    is_transient = context.IsTransient,
+                    details = context.Details,
+                    troubleshooting_steps = context.TroubleshootingSteps ?? new List<string>(),
+                    suggested_fixes = context.SuggestedFixes ?? new List<string>(),
+                    documentation_links = context.DocumentationLinks ?? new List<string>()
+                }
+            };
+        }
+
+        /// <summary>
         /// Creates a standard success response
         /// </summary>
         /// <param name="operation">The operation name</param>
@@ -18,8 +54,8 @@ namespace SqlServerMcpServer.Utilities
         /// <param name="recommendations">Optional recommendations</param>
         /// <param name="metadata">Optional metadata</param>
         /// <returns>Standard response object</returns>
-        public static object CreateStandardResponse(string operation, object data, long executionTimeMs, 
-            List<string> warnings = null, List<string> recommendations = null, 
+        public static object CreateStandardResponse(string operation, object data, long executionTimeMs,
+            List<string> warnings = null, List<string> recommendations = null,
             Dictionary<string, object> metadata = null)
         {
             return new
@@ -84,7 +120,7 @@ namespace SqlServerMcpServer.Utilities
         /// <param name="query">The blocked query</param>
         /// <param name="errorMessage">Error message</param>
         /// <returns>Standard blocked response object</returns>
-        public static object CreateStandardBlockedResponse(string operation, string blockedOperation, 
+        public static object CreateStandardBlockedResponse(string operation, string blockedOperation,
             string query, string errorMessage)
         {
             return new
@@ -145,6 +181,35 @@ namespace SqlServerMcpServer.Utilities
                 18456 => "Login failed. Check connection credentials.",
                 4060 => "Cannot open database. Check database name and permissions.",
                 _ => "Check SQL syntax, object names, and permissions."
+            };
+        }
+
+        /// <summary>
+        /// Creates a blocked response from ErrorContext
+        /// </summary>
+        /// <param name="context">The error context with blocked operation details</param>
+        /// <param name="executionTimeMs">Execution time in milliseconds</param>
+        /// <returns>Standard blocked response object</returns>
+        public static object CreateBlockedContextResponse(ErrorContext context, long executionTimeMs = 0)
+        {
+            return new
+            {
+                server_name = SqlConnectionManager.ServerName,
+                environment = SqlConnectionManager.Environment,
+                database = SqlConnectionManager.CurrentDatabase,
+                operation = context.Operation,
+                timestamp = DateTimeOffset.UtcNow,
+                execution_time_ms = executionTimeMs,
+                security_mode = "READ_ONLY_ENFORCED",
+                error = new
+                {
+                    code = context.Code.GetDescription(),
+                    message = context.Message,
+                    details = context.Details,
+                    troubleshooting_steps = context.TroubleshootingSteps ?? new List<string>(),
+                    suggested_fixes = context.SuggestedFixes ?? new List<string>(),
+                    documentation_links = context.DocumentationLinks ?? new List<string>()
+                }
             };
         }
     }

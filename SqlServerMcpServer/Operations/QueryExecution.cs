@@ -34,20 +34,20 @@ namespace SqlServerMcpServer.Operations
             try
             {
                 var corr = LoggingHelper.LogStart("ExecuteQuery", $"query:{query.Substring(0, Math.Min(query.Length, 100))}...");
-                
+
                 // Validate and normalize parameters
                 var effectivePageSize = Math.Min(pageSize ?? 100, 1000);
                 var effectiveOffset = offset ?? 0;
                 var effectiveMaxRows = Math.Min(maxRows ?? 100, 1000);
-                
+
                 // Use the smaller of maxRows and pageSize
                 var limit = Math.Min(effectiveMaxRows, effectivePageSize);
-                
+
                 // Validate read-only operation
                 if (!QueryValidator.IsReadOnlyQuery(query, out string blockedOperation))
                 {
-                    var errorMessage = QueryValidator.GetBlockedOperationMessage(blockedOperation);
-                    var blockedPayload = ResponseFormatter.CreateStandardBlockedResponse("ExecuteQuery", blockedOperation, query, errorMessage);
+                    var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation, query);
+                    var blockedPayload = ResponseFormatter.CreateBlockedContextResponse(context, sw.ElapsedMilliseconds);
                     return ResponseFormatter.ToJson(blockedPayload);
                 }
 
@@ -69,7 +69,7 @@ namespace SqlServerMcpServer.Operations
 
                 // Apply pagination and limits
                 var finalQuery = QueryFormatter.ApplyPaginationAndLimit(query, limit, effectiveOffset);
-                
+
                 using var command = new SqlCommand(finalQuery, connection)
                 {
                     CommandTimeout = SqlConnectionManager.CommandTimeout
@@ -78,9 +78,9 @@ namespace SqlServerMcpServer.Operations
                 // Execute query and get metadata
                 var queryMetadata = new Dictionary<string, object>();
                 var columnInfo = new List<Dictionary<string, object>>();
-                
+
                 using var reader = await command.ExecuteReaderAsync();
-                
+
                 // Get column information - only if we have a result set
                 if (reader.HasRows)
                 {
@@ -101,7 +101,7 @@ namespace SqlServerMcpServer.Operations
                 // Read results
                 var results = new List<Dictionary<string, object>>();
                 var rowCount = 0;
-                
+
                 while (await reader.ReadAsync() && rowCount < limit)
                 {
                     var row = new Dictionary<string, object>();
@@ -129,7 +129,7 @@ namespace SqlServerMcpServer.Operations
                             CommandTimeout = SqlConnectionManager.CommandTimeout
                         };
                         await resetCommand.ExecuteNonQueryAsync();
-                        
+
                         // Note: In a real implementation, you would capture the statistics output
                         // This is a simplified version
                         statistics["logical_reads"] = "N/A";
@@ -148,7 +148,7 @@ namespace SqlServerMcpServer.Operations
                 queryMetadata["rows_affected"] = rowCount;
                 queryMetadata["columns_returned"] = reader.FieldCount;
                 queryMetadata["query_hash"] = query.GetHashCode().ToString();
-                
+
                 // Calculate pagination info
                 var pagination = new Dictionary<string, object>
                 {
@@ -174,9 +174,9 @@ namespace SqlServerMcpServer.Operations
                     recommendations.Add("Consider optimizing your query for better performance");
                 }
 
-                var payload = ResponseFormatter.CreateStandardResponse("ExecuteQuery", queryData, sw.ElapsedMilliseconds, 
+                var payload = ResponseFormatter.CreateStandardResponse("ExecuteQuery", queryData, sw.ElapsedMilliseconds,
                     warnings: warnings.Any() ? warnings : null, recommendations: recommendations);
-                
+
                 sw.Stop();
                 LoggingHelper.LogEnd(corr, "ExecuteQuery", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
@@ -184,26 +184,33 @@ namespace SqlServerMcpServer.Operations
             catch (SqlException sqlEx)
             {
                 sw.Stop();
-                LoggingHelper.LogEnd(Guid.Empty, "ExecuteQuery", false, sw.ElapsedMilliseconds, sqlEx.Message);
-                
-                var errorDetails = new Dictionary<string, object>
-                {
-                    ["error_number"] = sqlEx.Number,
-                    ["error_line"] = sqlEx.LineNumber,
-                    ["error_message"] = sqlEx.Message,
-                    ["suggestion"] = ResponseFormatter.GetErrorSuggestion(sqlEx.Number)
-                };
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "ExecuteQuery", query);
 
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("ExecuteQuery", $"SQL Error: {sqlEx.Message}", 
-                    sw.ElapsedMilliseconds, "SQL_ERROR", errorDetails);
-                return ResponseFormatter.ToJson(errorPayload);
+                // Add query-specific context
+                context.Query = query;
+
+                // Add timeout-specific suggestions
+                if (sqlEx.Number == -1 || sqlEx.Number == -2)
+                {
+                    context.SuggestedFixes.Add("Add WHERE clauses to reduce result set size");
+                    context.SuggestedFixes.Add("Use pagination with OFFSET/FETCH clauses");
+                    context.SuggestedFixes.Add("Create indexes on columns used in WHERE clauses");
+                    context.SuggestedFixes.Add($"Increase SQLSERVER_COMMAND_TIMEOUT environment variable (currently {SqlConnectionManager.CommandTimeout}s)");
+                }
+
+                LoggingHelper.LogEnd(Guid.Empty, "ExecuteQuery", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
             catch (Exception ex)
             {
                 sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "ExecuteQuery");
+                context.Query = query;
+
                 LoggingHelper.LogEnd(Guid.Empty, "ExecuteQuery", false, sw.ElapsedMilliseconds, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("ExecuteQuery", $"Error: {ex.Message}", sw.ElapsedMilliseconds);
-                return ResponseFormatter.ToJson(errorPayload);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -226,45 +233,31 @@ namespace SqlServerMcpServer.Operations
             [Description("Named parameters to bind (e.g., { id: 42 })")] Dictionary<string, object>? parameters = null,
             [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("ReadQuery", query);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
 
                 // Enforce read-only
                 if (!QueryValidator.IsReadOnlyQuery(query, out string blockedOperation))
                 {
-                    var errorMessage = QueryValidator.GetBlockedOperationMessage(blockedOperation);
-
-                    return ResponseFormatter.ToJson(new
-                    {
-                        server_name = SqlConnectionManager.ServerName,
-                        environment = SqlConnectionManager.Environment,
-                        database = SqlConnectionManager.CurrentDatabase,
-                        error = errorMessage,
-                        blocked_operation = blockedOperation,
-                        blocked_query = query,
-                        operation_type = "BLOCKED",
-                        security_mode = "READ_ONLY_ENFORCED",
-                        allowed_operations = new[] { "SELECT queries for data retrieval", "Database listing", "Table schema inspection", "Database switching" },
-                        help = "This MCP server is configured for READ-ONLY access to prevent accidental data modification. Use SELECT statements to query data.",
-                        format = format?.ToLowerInvariant()
-                    });
+                    var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation, query);
+                    return ResponseFormatter.ToJson(
+                        ResponseFormatter.CreateBlockedContextResponse(context, sw.ElapsedMilliseconds));
                 }
 
                 // Validate and normalize parameters
                 var fmt = string.IsNullOrWhiteSpace(format) ? "json" : format.Trim().ToLowerInvariant();
                 if (fmt != "json" && fmt != "csv" && fmt != "table")
                 {
-                    return ResponseFormatter.ToJson(new
-                    {
-                        server_name = SqlConnectionManager.ServerName,
-                        environment = SqlConnectionManager.Environment,
-                        database = SqlConnectionManager.CurrentDatabase,
-                        error = "Invalid format. Allowed values: json, csv, table",
-                        operation_type = "VALIDATION_ERROR",
-                        security_mode = "READ_ONLY_ENFORCED"
-                    });
+                    var validationContext = new ErrorContext(
+                        ErrorCode.InvalidParameter,
+                        "Invalid format. Allowed values: json, csv, table",
+                        "ReadQuery"
+                    );
+                    validationContext.SuggestedFixes.Add("Use format: 'json' (default), 'csv', or 'table'");
+                    return ResponseFormatter.ToJson(
+                        ResponseFormatter.CreateErrorContextResponse(validationContext, sw.ElapsedMilliseconds));
                 }
 
                 int appliedTimeout = SqlConnectionManager.CommandTimeout;
@@ -405,20 +398,32 @@ namespace SqlServerMcpServer.Operations
 
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "ReadQuery", query);
+
+                // Add query-specific context
+                if (sqlEx.Number == -1 || sqlEx.Number == -2)
+                {
+                    context.SuggestedFixes.Add("Reduce the number of rows returned using WHERE clauses");
+                    context.SuggestedFixes.Add("Use pagination with OFFSET and FETCH clauses");
+                    context.SuggestedFixes.Add($"Increase timeout parameter (currently {timeout ?? SqlConnectionManager.CommandTimeout} seconds)");
+                }
+
+                LoggingHelper.LogEnd(Guid.Empty, "ReadQuery", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "ReadQuery", false, 0, ex.Message);
-                return ResponseFormatter.ToJson(new
-                {
-                    server_name = SqlConnectionManager.ServerName,
-                    environment = SqlConnectionManager.Environment,
-                    database = SqlConnectionManager.CurrentDatabase,
-                    error = $"SQL Error: {ex.Message}",
-                    operation_type = "ERROR",
-                    security_mode = "READ_ONLY_ENFORCED",
-                    help = "Check your SQL syntax and ensure you're only using SELECT statements.",
-                    format = format?.ToLowerInvariant()
-                });
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "ReadQuery");
+                context.Query = query;
+
+                LoggingHelper.LogEnd(Guid.Empty, "ReadQuery", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
     }

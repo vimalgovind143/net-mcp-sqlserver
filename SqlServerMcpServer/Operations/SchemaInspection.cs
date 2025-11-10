@@ -28,17 +28,17 @@ namespace SqlServerMcpServer.Operations
             [Description("Sort by: 'NAME', 'SIZE', or 'ROWS' (default: 'NAME')")] string? sortBy = "NAME",
             [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC")
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("GetTables", $"schema:{schemaFilter}, name:{nameFilter}, minRows:{minRowCount}, sort:{sortBy} {sortOrder}");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
                 // Validate sort parameters
                 sortBy = sortBy?.ToUpperInvariant() ?? "NAME";
                 sortOrder = sortOrder?.ToUpperInvariant() ?? "ASC";
-                
+
                 if (!new[] { "NAME", "SIZE", "ROWS" }.Contains(sortBy))
                     sortBy = "NAME";
                 if (!new[] { "ASC", "DESC" }.Contains(sortOrder))
@@ -86,13 +86,13 @@ namespace SqlServerMcpServer.Operations
                         t.is_memory_optimized,
                         t.temporal_type_desc,
                         (
-                            SELECT COUNT(*) 
-                            FROM sys.indexes i 
+                            SELECT COUNT(*)
+                            FROM sys.indexes i
                             WHERE i.object_id = t.object_id AND i.is_primary_key = 1
                         ) AS has_primary_key,
                         (
-                            SELECT COUNT(*) 
-                            FROM sys.indexes i 
+                            SELECT COUNT(*)
+                            FROM sys.indexes i
                             WHERE i.object_id = t.object_id AND i.type = 1
                         ) AS has_clustered_index,
                         (
@@ -118,7 +118,7 @@ namespace SqlServerMcpServer.Operations
                 {
                     CommandTimeout = SqlConnectionManager.CommandTimeout
                 };
-                
+
                 if (!string.IsNullOrEmpty(schemaFilter))
                     command.Parameters.AddWithValue("@schemaFilter", schemaFilter);
                 if (!string.IsNullOrEmpty(nameFilter))
@@ -185,11 +185,21 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetTables", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetTables");
+                LoggingHelper.LogEnd(Guid.Empty, "GetTables", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetTables", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetTables", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetTables");
+                LoggingHelper.LogEnd(Guid.Empty, "GetTables", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -206,10 +216,10 @@ namespace SqlServerMcpServer.Operations
             [Description("Schema name (defaults to 'dbo')")] string? schemaName = "dbo",
             [Description("Include column statistics (optional, default: false)")] bool includeStatistics = false)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var corr = LoggingHelper.LogStart("GetTableSchema", $"{schemaName}.{tableName}");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var corr = LoggingHelper.LogStart("GetTableSchema", $"table:{tableName}, schema:{schemaName}");
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
@@ -240,7 +250,7 @@ namespace SqlServerMcpServer.Operations
                     ) pk ON c.object_id = pk.object_id AND c.column_id = pk.column_id
                     LEFT JOIN sys.default_constraints dc ON c.default_object_id = dc.object_id
                     LEFT JOIN sys.computed_columns cc ON c.object_id = cc.object_id AND c.column_id = cc.column_id
-                    LEFT JOIN sys.extended_properties ep ON ep.major_id = tbl.object_id 
+                    LEFT JOIN sys.extended_properties ep ON ep.major_id = tbl.object_id
                         AND ep.minor_id = c.column_id AND ep.name = 'MS_Description'
                     WHERE tbl.name = @tableName AND s.name = @schemaName
                     ORDER BY c.column_id";
@@ -281,7 +291,7 @@ namespace SqlServerMcpServer.Operations
 
                 // Get foreign key information
                 var foreignKeysQuery = @"
-                    SELECT 
+                    SELECT
                         fk.name AS constraint_name,
                         c1.name AS column_name,
                         t2.name AS referenced_table,
@@ -304,7 +314,7 @@ namespace SqlServerMcpServer.Operations
                 {
                     fkCommand.Parameters.AddWithValue("@tableName", tableName);
                     fkCommand.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-                    
+
                     using var fkReader = await fkCommand.ExecuteReaderAsync();
                     while (await fkReader.ReadAsync())
                     {
@@ -321,7 +331,7 @@ namespace SqlServerMcpServer.Operations
 
                 // Get index information per column
                 var indexesQuery = @"
-                    SELECT 
+                    SELECT
                         i.name AS index_name,
                         i.type_desc AS index_type,
                         i.is_unique,
@@ -343,7 +353,7 @@ namespace SqlServerMcpServer.Operations
                 {
                     idxCommand.Parameters.AddWithValue("@tableName", tableName);
                     idxCommand.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-                    
+
                     using var idxReader = await idxCommand.ExecuteReaderAsync();
                     while (await idxReader.ReadAsync())
                     {
@@ -365,7 +375,7 @@ namespace SqlServerMcpServer.Operations
                     try
                     {
                         var statsQuery = @"
-                            SELECT 
+                            SELECT
                                 c.name AS column_name,
                                 p.rows AS total_rows,
                                 CASE WHEN c.is_nullable = 1 THEN 'NULLABLE' ELSE 'NOT NULL' END AS nullability
@@ -382,7 +392,7 @@ namespace SqlServerMcpServer.Operations
                         {
                             statsCommand.Parameters.AddWithValue("@tableName", tableName);
                             statsCommand.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-                            
+
                             using var statsReader = await statsCommand.ExecuteReaderAsync();
                             while (await statsReader.ReadAsync())
                             {
@@ -428,11 +438,21 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetTableSchema", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetTableSchema");
+                LoggingHelper.LogEnd(Guid.Empty, "GetTableSchema", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetTableSchema", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetTableSchema", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetTableSchema");
+                LoggingHelper.LogEnd(Guid.Empty, "GetTableSchema", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -445,10 +465,10 @@ namespace SqlServerMcpServer.Operations
         public static async Task<string> GetStoredProceduresAsync(
             [Description("Filter by procedure name (partial match, optional)")] string? nameFilter = null)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("GetStoredProcedures", $"name:{nameFilter}");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
@@ -501,11 +521,21 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetStoredProcedures", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetStoredProcedures");
+                LoggingHelper.LogEnd(Guid.Empty, "GetStoredProcedures", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetStoredProcedures", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetStoredProcedures", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetStoredProcedures");
+                LoggingHelper.LogEnd(Guid.Empty, "GetStoredProcedures", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -520,10 +550,10 @@ namespace SqlServerMcpServer.Operations
             [Description("Name of the stored procedure")] string procedureName,
             [Description("Schema name (defaults to 'dbo')")] string? schemaName = "dbo")
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("GetStoredProcedureDetails", $"{schemaName}.{procedureName}");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
@@ -678,11 +708,21 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetStoredProcedureDetails", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetStoredProcedureDetails");
+                LoggingHelper.LogEnd(Guid.Empty, "GetStoredProcedureDetails", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetStoredProcedureDetails", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetStoredProcedureDetails", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetStoredProcedureDetails");
+                LoggingHelper.LogEnd(Guid.Empty, "GetStoredProcedureDetails", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
 
@@ -699,10 +739,10 @@ namespace SqlServerMcpServer.Operations
             [Description("Schema name (defaults to 'dbo')")] string? schemaName = "dbo",
             [Description("Object type: 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' to auto-detect (default)")] string? objectType = "AUTO")
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("GetObjectDefinition", $"{schemaName}.{objectName}");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
@@ -940,11 +980,21 @@ namespace SqlServerMcpServer.Operations
                 LoggingHelper.LogEnd(corr, "GetObjectDefinition", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetObjectDefinition");
+                LoggingHelper.LogEnd(Guid.Empty, "GetObjectDefinition", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
             catch (Exception ex)
             {
-                LoggingHelper.LogEnd(Guid.Empty, "GetObjectDefinition", false, 0, ex.Message);
-                var errorPayload = ResponseFormatter.CreateStandardErrorResponse("GetObjectDefinition", ex.Message);
-                return ResponseFormatter.ToJson(errorPayload);
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetObjectDefinition");
+                LoggingHelper.LogEnd(Guid.Empty, "GetObjectDefinition", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
             }
         }
     }
