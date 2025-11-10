@@ -41,28 +41,35 @@ namespace SqlServerMcpServer.Utilities
                     return query;
                 }
 
-                // If query has TOP, modify it
+                // If query has TOP, modify it and potentially add OFFSET/FETCH
                 var topMatch = Regex.Match(withoutComments, @"\bSELECT\s+(DISTINCT\s+)?TOP\s+(\d+)\b", RegexOptions.IgnoreCase);
                 if (topMatch.Success)
                 {
                     if (int.TryParse(topMatch.Groups[2].Value, out var existing))
                     {
                         var newTop = Math.Min(existing, limit);
+                        var modifiedQuery = withoutComments;
                         if (newTop != existing)
                         {
-                            var capped = Regex.Replace(
+                            modifiedQuery = Regex.Replace(
                                 withoutComments,
-                                @"\bSELECT\s+(DISTINCT\s+)?TOP\s+\d+\b",
+                                @"(\bSELECT)\s+(DISTINCT\s+)?TOP\s+\d+\b",
                                 m =>
                                 {
-                                    var distinct = m.Groups[1].Value;
-                                    return $"SELECT {distinct}TOP {newTop}";
+                                    var selectKeyword = m.Groups[1].Value; // Preserve original case
+                                    var distinct = m.Groups[2].Value;
+                                    return $"{selectKeyword} {distinct}TOP {newTop}";
                                 },
                                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
                                 TimeSpan.FromMilliseconds(100)
                             );
-                            return string.IsNullOrWhiteSpace(capped) ? query : capped;
                         }
+                        // If offset > 0, add OFFSET/FETCH after modifying TOP
+                        if (offset > 0)
+                        {
+                            return $"{modifiedQuery} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY";
+                        }
+                        return string.IsNullOrWhiteSpace(modifiedQuery) ? query : modifiedQuery;
                     }
                     return query;
                 }
@@ -72,27 +79,29 @@ namespace SqlServerMcpServer.Utilities
                 {
                     var withOffset = Regex.Replace(
                         withoutComments,
-                        @"\bSELECT\s+(DISTINCT\s+)?",
+                        @"(\bSELECT)\s+(DISTINCT\s+)?",
                         m =>
                         {
-                            var distinct = m.Groups[1].Value;
-                            return $"SELECT {distinct}";
+                            var selectKeyword = m.Groups[1].Value; // Preserve original case
+                            var distinct = m.Groups[2].Value;
+                            return $"{selectKeyword} {distinct}";
                         },
                         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
                         TimeSpan.FromMilliseconds(100)
                     );
-                    
+
                     return $"{withOffset} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY";
                 }
 
                 // No pagination or TOP: insert TOP limit after first SELECT
                 var replaced = Regex.Replace(
                     withoutComments,
-                    @"\bSELECT\s+(DISTINCT\s+)?",
+                    @"(\bSELECT)\s+(DISTINCT\s+)?",
                     m =>
                     {
-                        var distinct = m.Groups[1].Value;
-                        return $"SELECT {distinct}TOP {limit} ";
+                        var selectKeyword = m.Groups[1].Value; // Preserve original case
+                        var distinct = m.Groups[2].Value;
+                        return $"{selectKeyword} {distinct}TOP {limit} ";
                     },
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
                     TimeSpan.FromMilliseconds(100)
@@ -119,6 +128,7 @@ namespace SqlServerMcpServer.Utilities
                 // Remove comments for safer parsing
                 var withoutComments = Regex.Replace(query, @"/\*.*?\*/", string.Empty, RegexOptions.Singleline);
                 withoutComments = Regex.Replace(withoutComments, @"--.*?$", string.Empty, RegexOptions.Multiline);
+                withoutComments = withoutComments.Trim();
 
                 // If query already has OFFSET/FETCH, modify it
                 if (Regex.IsMatch(withoutComments, @"\bOFFSET\s+\d+\s+ROWS\b", RegexOptions.IgnoreCase))
@@ -150,11 +160,12 @@ namespace SqlServerMcpServer.Utilities
                         {
                             var capped = Regex.Replace(
                                 withoutComments,
-                                @"\bSELECT\s+(DISTINCT\s+)?TOP\s+\d+\b",
+                                @"(\bSELECT)\s+(DISTINCT\s+)?TOP\s+\d+\b",
                                 m =>
                                 {
-                                    var distinct = m.Groups[1].Value;
-                                    return $"SELECT {distinct}TOP {newTop}";
+                                    var selectKeyword = m.Groups[1].Value; // Preserve original case
+                                    var distinct = m.Groups[2].Value;
+                                    return $"{selectKeyword} {distinct}TOP {newTop}";
                                 },
                                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
                                 TimeSpan.FromMilliseconds(100)
@@ -171,11 +182,12 @@ namespace SqlServerMcpServer.Utilities
                 // No pagination or TOP: insert TOP limit after first SELECT
                 var replaced = Regex.Replace(
                     withoutComments,
-                    @"\bSELECT\s+(DISTINCT\s+)?",
+                    @"(\bSELECT)\s+(DISTINCT\s+)?",
                     m =>
                     {
-                        var distinct = m.Groups[1].Value;
-                        return $"SELECT {distinct}TOP {maxRows} ";
+                        var selectKeyword = m.Groups[1].Value; // Preserve original case
+                        var distinct = m.Groups[2].Value;
+                        return $"{selectKeyword} {distinct}TOP {maxRows} ";
                     },
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
                     TimeSpan.FromMilliseconds(100)

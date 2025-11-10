@@ -2,9 +2,9 @@ name: .NET Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   build:
@@ -16,11 +16,14 @@ jobs:
       - name: Setup .NET SDK (including previews)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: "10.0.x"
           include-prerelease: true
 
       - name: Restore
-        run: dotnet restore SqlServerMcpServer/SqlServerMcpServer.csproj
+        run: dotnet restore SqlServerMcpServer.sln
 
       - name: Build
-        run: dotnet build SqlServerMcpServer/SqlServerMcpServer.csproj --configuration Release --no-restore
+        run: dotnet build SqlServerMcpServer.sln --configuration Release --no-restore
+
+      - name: Run Tests with Coverage
+        run: dotnet test SqlServerMcpServer.Tests/SqlServerMcpServer.Tests.csproj --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage"</parameter>
