@@ -24,6 +24,12 @@ namespace SqlServerMcpServer
         private static int _commandTimeout = ParseIntEnv("SQLSERVER_COMMAND_TIMEOUT",
             ParseIntConfig("SqlServer", "CommandTimeout", 30));
 
+        static SqlServerTools()
+        {
+            Console.Error.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [INFO] SqlServerTools static constructor called");
+            Console.Error.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [INFO] Initializing with database: {_currentDatabase}");
+        }
+
         private static int ParseIntEnv(string name, int defaultValue)
         {
             var val = Environment.GetEnvironmentVariable(name);

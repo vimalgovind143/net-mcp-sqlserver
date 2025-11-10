@@ -372,3 +372,6 @@ appsettings*.json
 # MCP specific
 *.pidb
 *.lock
+
+/logs
+*.log
