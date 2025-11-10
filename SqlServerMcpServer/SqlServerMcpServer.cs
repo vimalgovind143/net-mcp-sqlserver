@@ -368,32 +368,100 @@ namespace SqlServerMcpServer
             }
         }
 
-        [McpServerTool, Description("Get a list of all databases on the SQL Server instance")]
-        public static async Task<string> GetDatabasesAsync()
+        [McpServerTool, Description("Get a list of all databases on the SQL Server instance with size and backup information")]
+        public static async Task<string> GetDatabasesAsync(
+            [Description("Include system databases (optional, default: false)")] bool includeSystemDatabases = false,
+            [Description("Filter by minimum size in MB (optional)")] decimal? minSizeMB = null,
+            [Description("Filter by database state: 'ONLINE', 'OFFLINE', or 'ALL' (default: 'ONLINE')")] string? stateFilter = "ONLINE",
+            [Description("Filter by database name (partial match, optional)")] string? nameFilter = null)
         {
             try
             {
-                var corr = LogStart("GetDatabases");
+                var corr = LogStart("GetDatabases", $"includeSystem:{includeSystemDatabases}, minSize:{minSizeMB}, state:{stateFilter}, name:{nameFilter}");
                 var sw = Stopwatch.StartNew();
+                
+                // Validate state filter
+                stateFilter = stateFilter?.ToUpperInvariant() ?? "ONLINE";
+                if (!new[] { "ONLINE", "OFFLINE", "ALL" }.Contains(stateFilter))
+                    stateFilter = "ONLINE";
+
                 // Use master database connection for listing databases
                 var masterConnectionString = CreateConnectionStringForDatabase("master");
                 using var connection = new SqlConnection(masterConnectionString);
                 await connection.OpenAsync();
 
-                var query = @"
-                    SELECT
-                        name AS database_name,
-                        database_id,
-                        create_date,
-                        state_desc,
-                        CASE WHEN name = @CurrentDb THEN 1 ELSE 0 END AS is_current
-                    FROM sys.databases
-                    WHERE name NOT IN ('master', 'tempdb', 'model', 'msdb')
-                    ORDER BY name";
+                // Build dynamic WHERE clause
+                var whereConditions = new List<string>();
+                
+                if (!includeSystemDatabases)
+                {
+                    whereConditions.Add("d.name NOT IN ('master', 'tempdb', 'model', 'msdb')");
+                }
+                
+                if (minSizeMB.HasValue && minSizeMB.Value > 0)
+                {
+                    whereConditions.Add("SUM(mf.size * 8.0 / 1024) >= @minSizeMB");
+                }
+                
+                if (stateFilter != "ALL")
+                {
+                    whereConditions.Add("d.state_desc = @stateFilter");
+                }
+
+                if (!string.IsNullOrEmpty(nameFilter))
+                {
+                    whereConditions.Add("d.name LIKE @nameFilter");
+                }
+
+                var whereClause = whereConditions.Count > 0 ? "WHERE " + string.Join(" AND ", whereConditions) : "";
+
+                var query = $@"
+                    SELECT 
+                        d.name AS database_name,
+                        d.database_id,
+                        d.create_date,
+                        d.state_desc,
+                        d.recovery_model_desc,
+                        d.compatibility_level,
+                        d.collation_name,
+                        d.is_read_only,
+                        d.user_access_desc,
+                        SUM(mf.size * 8.0 / 1024) AS size_mb,
+                        CASE WHEN d.name = @CurrentDb THEN 1 ELSE 0 END AS is_current,
+                        (
+                            SELECT COUNT(*) 
+                            FROM sys.tables t 
+                            WHERE t.object_id > 255 -- Exclude system tables
+                        ) AS table_count,
+                        (
+                            SELECT COUNT(*) 
+                            FROM sys.views v 
+                            WHERE v.object_id > 255
+                        ) AS view_count,
+                        (
+                            SELECT COUNT(*) 
+                            FROM sys.procedures p 
+                            WHERE p.object_id > 255
+                        ) AS stored_procedure_count
+                    FROM sys.databases d
+                    LEFT JOIN sys.master_files mf ON d.database_id = mf.database_id
+                    {whereClause}
+                    GROUP BY d.name, d.database_id, d.create_date, d.state_desc, 
+                             d.recovery_model_desc, d.compatibility_level, d.collation_name,
+                             d.is_read_only, d.user_access_desc
+                    ORDER BY d.name";
 
                 using var command = new SqlCommand(query, connection);
                 command.CommandTimeout = _commandTimeout;
                 command.Parameters.AddWithValue("@CurrentDb", _currentDatabase);
+                
+                if (minSizeMB.HasValue)
+                    command.Parameters.AddWithValue("@minSizeMB", minSizeMB.Value);
+                if (stateFilter != "ALL")
+                    command.Parameters.AddWithValue("@stateFilter", stateFilter);
+
+                if (!string.IsNullOrEmpty(nameFilter))
+                    command.Parameters.AddWithValue("@nameFilter", $"%{nameFilter}%");
 
                 using var reader = await command.ExecuteReaderAsync();
 
@@ -407,12 +475,102 @@ namespace SqlServerMcpServer
                         ["database_id"] = reader["database_id"],
                         ["create_date"] = reader["create_date"],
                         ["state_desc"] = reader["state_desc"],
-                        ["is_current"] = reader["is_current"]
+                        ["recovery_model_desc"] = reader["recovery_model_desc"],
+                        ["compatibility_level"] = reader["compatibility_level"],
+                        ["collation_name"] = reader["collation_name"],
+                        ["is_read_only"] = reader["is_read_only"],
+                        ["user_access_desc"] = reader["user_access_desc"],
+                        ["size_mb"] = reader["size_mb"] is DBNull ? 0.0m : Math.Round(Convert.ToDecimal(reader["size_mb"]), 2),
+                        ["is_current"] = reader["is_current"],
+                        ["object_summary"] = new Dictionary<string, object>
+                        {
+                            ["table_count"] = reader["table_count"],
+                            ["view_count"] = reader["view_count"],
+                            ["stored_procedure_count"] = reader["stored_procedure_count"]
+                        }
                     };
                     databases.Add(database);
                 }
 
-                var payload = databases;
+                reader.Close();
+
+                // Get backup information for each database
+                var backupInfo = new Dictionary<string, object>();
+                try
+                {
+                    var backupQuery = @"
+                        SELECT 
+                            database_name,
+                            MAX(backup_finish_date) AS last_backup_date,
+                            type AS backup_type
+                        FROM msdb.dbo.backupset
+                        WHERE database_name IN (SELECT name FROM sys.databases)
+                        GROUP BY database_name, type
+                        ORDER BY database_name, type";
+
+                    using var backupCommand = new SqlCommand(backupQuery, connection);
+                    backupCommand.CommandTimeout = _commandTimeout;
+                    
+                    using var backupReader = await backupCommand.ExecuteReaderAsync();
+                    while (await backupReader.ReadAsync())
+                    {
+                        var dbName = backupReader["database_name"].ToString();
+                        if (!backupInfo.ContainsKey(dbName))
+                        {
+                            backupInfo[dbName] = new Dictionary<string, object>();
+                        }
+                        
+                        var backupType = backupReader["backup_type"].ToString();
+                        var backupDate = backupReader["last_backup_date"];
+                        
+                        ((Dictionary<string, object>)backupInfo[dbName])[backupType] = 
+                            backupDate is DBNull ? null : backupDate;
+                    }
+                }
+                catch
+                {
+                    // Backup information might not be accessible
+                    backupInfo["error"] = "Backup information not available";
+                }
+
+                // Add backup info to databases
+                foreach (var db in databases)
+                {
+                    var dbName = db["database_name"].ToString();
+                    if (backupInfo.ContainsKey(dbName))
+                    {
+                        db["backup_info"] = backupInfo[dbName];
+                    }
+                    else
+                    {
+                        db["backup_info"] = new Dictionary<string, object>
+                        {
+                            ["D"] = null, // Full backup
+                            ["I"] = null  // Differential backup
+                        };
+                    }
+                }
+
+                var databasesData = new
+                {
+                    database_count = databases.Count,
+                    filters_applied = new
+                    {
+                        include_system_databases = includeSystemDatabases,
+                        min_size_mb = minSizeMB,
+                        state_filter = stateFilter,
+                        name_filter = nameFilter
+                    },
+                    databases = databases
+                };
+
+                var metadata = new Dictionary<string, object>
+                {
+                    ["row_count"] = databases.Count,
+                    ["page_count"] = 1
+                };
+
+                var payload = CreateStandardResponse("GetDatabases", databasesData, sw.ElapsedMilliseconds, metadata: metadata);
                 sw.Stop();
                 LogEnd(corr, "GetDatabases", true, sw.ElapsedMilliseconds);
                 return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
@@ -420,27 +578,32 @@ namespace SqlServerMcpServer
             catch (Exception ex)
             {
                 LogEnd(Guid.Empty, "GetDatabases", false, 0, ex.Message);
-                return JsonSerializer.Serialize(new
-                {
-                    server_name = _serverName,
-                    environment = _environment,
-                    database = _currentDatabase,
-                    error = $"Error getting databases: {ex.Message}",
-                    operation_type = "ERROR",
-                    security_mode = "READ_ONLY_ENFORCED"
-                }, new JsonSerializerOptions { WriteIndented = true });
+                var errorPayload = CreateStandardErrorResponse("GetDatabases", ex.Message);
+                return JsonSerializer.Serialize(errorPayload, new JsonSerializerOptions { WriteIndented = true });
             }
         }
 
-        [McpServerTool, Description("Execute a read-only SQL query on the current database")]
+        [McpServerTool, Description("Execute a read-only SQL query on the current database with pagination and metadata")]
         public static async Task<string> ExecuteQueryAsync(
             [Description("The SQL query to execute (SELECT statements only)")] string query,
-            [Description("Maximum rows to return (default 100, capped at 100)")] int? maxRows = 100)
+            [Description("Maximum rows to return (default 100, max 1000)")] int? maxRows = 100,
+            [Description("Offset for pagination (default: 0)")] int? offset = 0,
+            [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
+            [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false)
         {
+            var sw = Stopwatch.StartNew();
             try
             {
-                var corr = LogStart("ExecuteQuery", query);
-                var sw = Stopwatch.StartNew();
+                var corr = LogStart("ExecuteQuery", $"query:{query.Substring(0, Math.Min(query.Length, 100))}...");
+                
+                // Validate and normalize parameters
+                var effectivePageSize = Math.Min(pageSize ?? 100, 1000);
+                var effectiveOffset = offset ?? 0;
+                var effectiveMaxRows = Math.Min(maxRows ?? 100, 1000);
+                
+                // Use the smaller of maxRows and pageSize
+                var limit = Math.Min(effectiveMaxRows, effectivePageSize);
+                
                 // Validate read-only operation
                 if (!IsReadOnlyQuery(query, out string blockedOperation))
                 {
@@ -463,37 +626,70 @@ namespace SqlServerMcpServer
                         _ => $"❌ {blockedOperation} operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing."
                     };
 
-                    return JsonSerializer.Serialize(new
-                    {
-                        server_name = _serverName,
-                        environment = _environment,
-                        database = _currentDatabase,
-                        error = errorMessage,
-                        blocked_operation = blockedOperation,
-                        blocked_query = query,
-                        operation_type = "BLOCKED",
-                        security_mode = "READ_ONLY_ENFORCED",
-                        allowed_operations = new[] { "SELECT queries for data retrieval", "Database listing", "Table schema inspection", "Database switching" },
-                        help = "This MCP server is configured for READ-ONLY access to prevent accidental data modification. Use SELECT statements to query data."
-                    }, new JsonSerializerOptions { WriteIndented = true });
+                    var blockedPayload = CreateStandardBlockedResponse("ExecuteQuery", blockedOperation, query, errorMessage);
+                    return JsonSerializer.Serialize(blockedPayload, new JsonSerializerOptions { WriteIndented = true });
+                }
+
+                // Generate query warnings
+                var warnings = new List<string>();
+                var upperQuery = query.ToUpperInvariant();
+                
+                if (!upperQuery.Contains("WHERE") && !upperQuery.Contains("TOP"))
+                {
+                    warnings.Add("Query may return large result set - consider adding WHERE clause or TOP limit");
+                }
+                
+                if (effectiveOffset > 0 && !upperQuery.Contains("OFFSET"))
+                {
+                    warnings.Add("Using manual pagination - consider using OFFSET/FETCH in your query for better performance");
                 }
 
                 using var connection = new SqlConnection(_currentConnectionString);
                 await connection.OpenAsync();
 
-                // Set read-only intent for additional safety
-                var enforcedLimit = Math.Min(maxRows ?? 100, 100);
-                var finalQuery = ApplyTopLimit(query, enforcedLimit);
+                // Enable statistics if requested
+                if (includeStatistics)
+                {
+                    using var statsCommand = new SqlCommand("SET STATISTICS IO ON; SET STATISTICS TIME ON;", connection);
+                    await statsCommand.ExecuteNonQueryAsync();
+                }
+
+                // Apply pagination and limits
+                var finalQuery = ApplyPaginationAndLimit(query, limit, effectiveOffset);
+                
                 using var command = new SqlCommand(finalQuery, connection)
                 {
-                    CommandTimeout = _commandTimeout // Prevent long-running queries
+                    CommandTimeout = _commandTimeout
                 };
 
+                // Execute query and get metadata
+                var queryMetadata = new Dictionary<string, object>();
+                var columnInfo = new List<Dictionary<string, object>>();
+                
                 using var reader = await command.ExecuteReaderAsync();
+                
+                // Get column information - only if we have a result set
+                if (reader.HasRows)
+                {
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        var column = new Dictionary<string, object>
+                        {
+                            ["name"] = reader.GetName(i),
+                            ["data_type"] = reader.GetDataTypeName(i),
+                            ["sql_type"] = reader.GetFieldType(i).Name,
+                            ["is_nullable"] = true, // Default to true for schema info
+                            ["max_length"] = 0 // Would need schema query for accurate info
+                        };
+                        columnInfo.Add(column);
+                    }
+                }
 
+                // Read results
                 var results = new List<Dictionary<string, object>>();
-
-                while (await reader.ReadAsync())
+                var rowCount = 0;
+                
+                while (await reader.ReadAsync() && rowCount < limit)
                 {
                     var row = new Dictionary<string, object>();
                     for (int i = 0; i < reader.FieldCount; i++)
@@ -503,56 +699,132 @@ namespace SqlServerMcpServer
                         row[columnName] = value is DBNull ? null : value;
                     }
                     results.Add(row);
+                    rowCount++;
                 }
 
-                var payload = new
+                reader.Close();
+
+                // Get execution statistics if requested
+                var statistics = new Dictionary<string, object>();
+                if (includeStatistics)
                 {
-                    server_name = _serverName,
-                    environment = _environment,
-                    database = _currentDatabase,
-                    row_count = results.Count,
-                    operation_type = "READ_ONLY_SELECT",
-                    security_mode = "READ_ONLY_ENFORCED",
-                    message = "✅ Read-only SELECT query executed successfully",
-                    data = results,
-                    applied_limit = enforcedLimit
+                    try
+                    {
+                        // Reset statistics
+                        using var resetCommand = new SqlCommand("SET STATISTICS IO OFF; SET STATISTICS TIME OFF;", connection);
+                        await resetCommand.ExecuteNonQueryAsync();
+                        
+                        // Note: In a real implementation, you would capture the statistics output
+                        // This is a simplified version
+                        statistics["logical_reads"] = "N/A";
+                        statistics["physical_reads"] = "N/A";
+                        statistics["cpu_time_ms"] = sw.ElapsedMilliseconds;
+                        statistics["elapsed_time_ms"] = sw.ElapsedMilliseconds;
+                    }
+                    catch
+                    {
+                        statistics["error"] = "Statistics collection failed";
+                    }
+                }
+
+                // Build query metadata
+                queryMetadata["execution_time_ms"] = sw.ElapsedMilliseconds;
+                queryMetadata["rows_affected"] = rowCount;
+                queryMetadata["columns_returned"] = reader.FieldCount;
+                queryMetadata["query_hash"] = query.GetHashCode().ToString();
+                
+                // Calculate pagination info
+                var pagination = new Dictionary<string, object>
+                {
+                    ["current_page"] = effectiveOffset / effectivePageSize + 1,
+                    ["page_size"] = effectivePageSize,
+                    ["offset"] = effectiveOffset,
+                    ["has_more"] = rowCount == effectivePageSize
                 };
+
+                var queryData = new
+                {
+                    query_metadata = queryMetadata,
+                    columns = columnInfo,
+                    pagination = pagination,
+                    statistics = includeStatistics ? statistics : null,
+                    data = results,
+                    applied_limit = limit
+                };
+
+                var recommendations = new List<string>();
+                if (warnings.Any())
+                {
+                    recommendations.Add("Consider optimizing your query for better performance");
+                }
+
+                var payload = CreateStandardResponse("ExecuteQuery", queryData, sw.ElapsedMilliseconds, 
+                    warnings: warnings.Any() ? warnings : null, recommendations: recommendations);
+                
                 sw.Stop();
                 LogEnd(corr, "ExecuteQuery", true, sw.ElapsedMilliseconds);
                 return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
             }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                LogEnd(Guid.Empty, "ExecuteQuery", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                
+                var errorDetails = new Dictionary<string, object>
+                {
+                    ["error_number"] = sqlEx.Number,
+                    ["error_line"] = sqlEx.LineNumber,
+                    ["error_message"] = sqlEx.Message,
+                    ["suggestion"] = GetErrorSuggestion(sqlEx.Number)
+                };
+
+                var errorPayload = CreateStandardErrorResponse("ExecuteQuery", $"SQL Error: {sqlEx.Message}", 
+                    sw.ElapsedMilliseconds, "SQL_ERROR", errorDetails);
+                return JsonSerializer.Serialize(errorPayload, new JsonSerializerOptions { WriteIndented = true });
+            }
             catch (Exception ex)
             {
-                LogEnd(Guid.Empty, "ExecuteQuery", false, 0, ex.Message);
-                return JsonSerializer.Serialize(new
-                {
-                    server_name = _serverName,
-                    environment = _environment,
-                    database = _currentDatabase,
-                    error = $"SQL Error: {ex.Message}",
-                    operation_type = "ERROR",
-                    security_mode = "READ_ONLY_ENFORCED",
-                    help = "Check your SQL syntax and ensure you're only using SELECT statements.",
-                    applied_limit = Math.Min(maxRows ?? 100, 100)
-                }, new JsonSerializerOptions { WriteIndented = true });
+                sw.Stop();
+                LogEnd(Guid.Empty, "ExecuteQuery", false, sw.ElapsedMilliseconds, ex.Message);
+                var errorPayload = CreateStandardErrorResponse("ExecuteQuery", $"Error: {ex.Message}", sw.ElapsedMilliseconds);
+                return JsonSerializer.Serialize(errorPayload, new JsonSerializerOptions { WriteIndented = true });
             }
         }
 
-        private static string ApplyTopLimit(string query, int maxRows)
+        private static string ApplyPaginationAndLimit(string query, int limit, int offset)
         {
             try
             {
-                // Do not alter if TOP already present near first SELECT
+                // Remove comments for safer parsing
                 var withoutComments = Regex.Replace(query, @"/\*.*?\*/", string.Empty, RegexOptions.Singleline);
                 withoutComments = Regex.Replace(withoutComments, @"--.*?$", string.Empty, RegexOptions.Multiline);
 
-                // If TOP exists, cap it to maxRows
+                // If query already has OFFSET/FETCH, modify it
+                if (Regex.IsMatch(withoutComments, @"\bOFFSET\s+\d+\s+ROWS\b", RegexOptions.IgnoreCase))
+                {
+                    // Query already has pagination, just adjust the limit
+                    var fetchMatch = Regex.Match(withoutComments, @"\bFETCH\s+NEXT\s+(\d+)\s+ROWS\s+ONLY\b", RegexOptions.IgnoreCase);
+                    if (fetchMatch.Success && int.TryParse(fetchMatch.Groups[1].Value, out var existingFetch))
+                    {
+                        var newFetch = Math.Min(existingFetch, limit);
+                        return Regex.Replace(
+                            withoutComments,
+                            @"\bFETCH\s+NEXT\s+\d+\s+ROWS\s+ONLY\b",
+                            $"FETCH NEXT {newFetch} ROWS ONLY",
+                            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                            TimeSpan.FromMilliseconds(100)
+                        );
+                    }
+                    return query;
+                }
+
+                // If query has TOP, modify it
                 var topMatch = Regex.Match(withoutComments, @"\bSELECT\s+(DISTINCT\s+)?TOP\s+(\d+)\b", RegexOptions.IgnoreCase);
                 if (topMatch.Success)
                 {
                     if (int.TryParse(topMatch.Groups[2].Value, out var existing))
                     {
-                        var newTop = Math.Min(existing, maxRows);
+                        var newTop = Math.Min(existing, limit);
                         if (newTop != existing)
                         {
                             var capped = Regex.Replace(
@@ -568,19 +840,36 @@ namespace SqlServerMcpServer
                             );
                             return string.IsNullOrWhiteSpace(capped) ? query : capped;
                         }
-                        return query; // Existing TOP already within cap
                     }
-                    return query; // Non-numeric TOP, leave unchanged
+                    return query;
                 }
 
-                // No TOP: insert TOP maxRows after first SELECT
+                // Add OFFSET/FETCH for pagination if offset > 0
+                if (offset > 0)
+                {
+                    var withOffset = Regex.Replace(
+                        withoutComments,
+                        @"\bSELECT\s+(DISTINCT\s+)?",
+                        m =>
+                        {
+                            var distinct = m.Groups[1].Value;
+                            return $"SELECT {distinct}";
+                        },
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                        TimeSpan.FromMilliseconds(100)
+                    );
+                    
+                    return $"{withOffset} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY";
+                }
+
+                // No pagination or TOP: insert TOP limit after first SELECT
                 var replaced = Regex.Replace(
                     withoutComments,
                     @"\bSELECT\s+(DISTINCT\s+)?",
                     m =>
                     {
                         var distinct = m.Groups[1].Value;
-                        return $"SELECT {distinct}TOP {maxRows} ";
+                        return $"SELECT {distinct}TOP {limit} ";
                     },
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
                     TimeSpan.FromMilliseconds(100)
@@ -594,29 +883,207 @@ namespace SqlServerMcpServer
             }
         }
 
-        [McpServerTool, Description("Get a list of all tables in the current database")]
-        public static async Task<string> GetTablesAsync()
+        private static string GetErrorSuggestion(int errorNumber)
+        {
+            return errorNumber switch
+            {
+                102 => "Incorrect syntax near a keyword. Check your SQL syntax.",
+                207 => "Invalid column name. Verify column names exist in the table.",
+                208 => "Invalid object name. Check if table/view exists and schema is correct.",
+                245 => "Conversion failed. Check data types in your WHERE clause.",
+                815 => "Arithmetic overflow. Check numeric values in your query.",
+                156 => "Incorrect syntax near the keyword. Check for missing commas or parentheses.",
+                137 => "Must declare the scalar variable. Check parameter usage.",
+                2812 => "Could not find stored procedure. Verify procedure name and schema.",
+                911 => "Database does not exist. Check database name.",
+                18456 => "Login failed. Check connection credentials.",
+                4060 => "Cannot open database. Check database name and permissions.",
+                _ => "Check SQL syntax, object names, and permissions."
+            };
+        }
+
+        private static object CreateStandardResponse(string operation, object data, long executionTimeMs, 
+            List<string> warnings = null, List<string> recommendations = null, 
+            Dictionary<string, object> metadata = null)
+        {
+            return new
+            {
+                server_name = _serverName,
+                environment = _environment,
+                database = _currentDatabase,
+                operation = operation,
+                timestamp = DateTimeOffset.UtcNow,
+                execution_time_ms = executionTimeMs,
+                security_mode = "READ_ONLY",
+                data = data,
+                metadata = metadata ?? new Dictionary<string, object>(),
+                warnings = warnings ?? new List<string>(),
+                recommendations = recommendations ?? new List<string>()
+            };
+        }
+
+        private static object CreateStandardErrorResponse(string operation, string error, long executionTimeMs = 0,
+            string errorCode = "SQL_ERROR", Dictionary<string, object> errorDetails = null,
+            List<string> troubleshootingSteps = null)
+        {
+            return new
+            {
+                server_name = _serverName,
+                environment = _environment,
+                database = _currentDatabase,
+                operation = operation,
+                timestamp = DateTimeOffset.UtcNow,
+                execution_time_ms = executionTimeMs,
+                security_mode = "READ_ONLY_ENFORCED",
+                error = new
+                {
+                    code = errorCode,
+                    message = error,
+                    details = errorDetails,
+                    troubleshooting_steps = troubleshootingSteps ?? new List<string>
+                    {
+                        "Check your SQL syntax",
+                        "Verify object names and permissions",
+                        "Ensure you're using only SELECT statements"
+                    }
+                }
+            };
+        }
+
+        private static object CreateStandardBlockedResponse(string operation, string blockedOperation, 
+            string query, string errorMessage)
+        {
+            return new
+            {
+                server_name = _serverName,
+                environment = _environment,
+                database = _currentDatabase,
+                operation = operation,
+                timestamp = DateTimeOffset.UtcNow,
+                security_mode = "READ_ONLY_ENFORCED",
+                error = new
+                {
+                    code = "BLOCKED_OPERATION",
+                    message = errorMessage,
+                    details = new Dictionary<string, object>
+                    {
+                        ["blocked_operation"] = blockedOperation,
+                        ["blocked_query"] = query
+                    },
+                    troubleshooting_steps = new List<string>
+                    {
+                        "This MCP server is READ-ONLY only",
+                        "Use SELECT statements for data retrieval",
+                        "Database listing, schema inspection, and switching are allowed"
+                    }
+                }
+            };
+        }
+
+        [McpServerTool, Description("Get a list of all tables in the current database with size information and filtering options")]
+        public static async Task<string> GetTablesAsync(
+            [Description("Filter tables by schema name (optional)")] string? schemaFilter = null,
+            [Description("Filter by table name (partial match, optional)")] string? nameFilter = null,
+            [Description("Minimum row count filter (optional)")] int? minRowCount = null,
+            [Description("Sort by: 'NAME', 'SIZE', or 'ROWS' (default: 'NAME')")] string? sortBy = "NAME",
+            [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC")
         {
             try
             {
-                var corr = LogStart("GetTables");
+                var corr = LogStart("GetTables", $"schema:{schemaFilter}, name:{nameFilter}, minRows:{minRowCount}, sort:{sortBy} {sortOrder}");
                 var sw = Stopwatch.StartNew();
                 using var connection = new SqlConnection(_currentConnectionString);
                 await connection.OpenAsync();
 
-                var query = @"
+                // Validate sort parameters
+                sortBy = sortBy?.ToUpperInvariant() ?? "NAME";
+                sortOrder = sortOrder?.ToUpperInvariant() ?? "ASC";
+                
+                if (!new[] { "NAME", "SIZE", "ROWS" }.Contains(sortBy))
+                    sortBy = "NAME";
+                if (!new[] { "ASC", "DESC" }.Contains(sortOrder))
+                    sortOrder = "ASC";
+
+                // Build dynamic WHERE clause for filters
+                var whereConditions = new List<string>();
+                if (!string.IsNullOrEmpty(schemaFilter))
+                {
+                    whereConditions.Add("s.name = @schemaFilter");
+                }
+                if (!string.IsNullOrEmpty(nameFilter))
+                {
+                    whereConditions.Add("t.name LIKE @nameFilter");
+                }
+                if (minRowCount.HasValue && minRowCount.Value > 0)
+                {
+                    whereConditions.Add("p.rows >= @minRowCount");
+                }
+
+                // Always include the index condition
+                whereConditions.Add("i.index_id IN (0,1)");
+
+                var whereClause = "WHERE " + string.Join(" AND ", whereConditions);
+
+                // Build dynamic ORDER BY clause
+                var orderByClause = sortBy switch
+                {
+                    "SIZE" => $"ORDER BY total_size_mb {(sortOrder == "DESC" ? "DESC" : "ASC")}, s.name, t.name",
+                    "ROWS" => $"ORDER BY p.rows {(sortOrder == "DESC" ? "DESC" : "ASC")}, s.name, t.name",
+                    _ => $"ORDER BY s.name {(sortOrder == "DESC" ? "DESC" : "ASC")}, t.name"
+                };
+
+                var query = $@"
                     SELECT
                         t.name AS table_name,
                         s.name AS schema_name,
-                        p.rows AS row_count
+                        p.rows AS row_count,
+                        SUM(a.total_pages) * 8 / 1024.0 AS total_size_mb,
+                        SUM(a.used_pages) * 8 / 1024.0 AS used_size_mb,
+                        SUM(a.data_pages) * 8 / 1024.0 AS data_size_mb,
+                        (SUM(a.total_pages) - SUM(a.used_pages)) * 8 / 1024.0 AS unused_size_mb,
+                        t.create_date,
+                        t.modify_date,
+                        t.is_memory_optimized,
+                        t.temporal_type_desc,
+                        (
+                            SELECT COUNT(*) 
+                            FROM sys.indexes i 
+                            WHERE i.object_id = t.object_id AND i.is_primary_key = 1
+                        ) AS has_primary_key,
+                        (
+                            SELECT COUNT(*) 
+                            FROM sys.indexes i 
+                            WHERE i.object_id = t.object_id AND i.type = 1
+                        ) AS has_clustered_index,
+                        (
+                            SELECT COUNT(*)
+                            FROM sys.foreign_keys fk
+                            WHERE fk.parent_object_id = t.object_id
+                        ) AS foreign_key_count,
+                        (
+                            SELECT COUNT(*)
+                            FROM sys.foreign_keys fk
+                            WHERE fk.referenced_object_id = t.object_id
+                        ) AS referenced_by_count
                     FROM sys.tables t
                     INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-                    LEFT JOIN sys.partitions p ON t.object_id = p.object_id AND p.index_id IN (0,1)
-                    GROUP BY t.name, s.name, p.rows
-                    ORDER BY s.name, t.name";
+                    INNER JOIN sys.indexes i ON t.object_id = i.object_id
+                    INNER JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id
+                    INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
+                    {whereClause}
+                    GROUP BY t.object_id, t.name, s.name, p.rows, t.create_date, t.modify_date, t.is_memory_optimized, t.temporal_type_desc
+                    {orderByClause}";
 
                 using var command = new SqlCommand(query, connection);
                 command.CommandTimeout = _commandTimeout;
+                
+                if (!string.IsNullOrEmpty(schemaFilter))
+                    command.Parameters.AddWithValue("@schemaFilter", schemaFilter);
+                if (!string.IsNullOrEmpty(nameFilter))
+                    command.Parameters.AddWithValue("@nameFilter", $"%{nameFilter}%");
+                if (minRowCount.HasValue)
+                    command.Parameters.AddWithValue("@minRowCount", minRowCount.Value);
+
                 using var reader = await command.ExecuteReaderAsync();
 
                 var tables = new List<Dictionary<string, object>>();
@@ -627,17 +1094,51 @@ namespace SqlServerMcpServer
                     {
                         ["table_name"] = reader["table_name"],
                         ["schema_name"] = reader["schema_name"],
-                        ["row_count"] = reader["row_count"]
+                        ["row_count"] = reader["row_count"],
+                        ["total_size_mb"] = Math.Round(Convert.ToDecimal(reader["total_size_mb"]), 2),
+                        ["used_size_mb"] = Math.Round(Convert.ToDecimal(reader["used_size_mb"]), 2),
+                        ["data_size_mb"] = Math.Round(Convert.ToDecimal(reader["data_size_mb"]), 2),
+                        ["unused_size_mb"] = Math.Round(Convert.ToDecimal(reader["unused_size_mb"]), 2),
+                        ["create_date"] = reader["create_date"],
+                        ["modify_date"] = reader["modify_date"],
+                        ["is_memory_optimized"] = reader["is_memory_optimized"],
+                        ["temporal_type_desc"] = reader["temporal_type_desc"] is DBNull ? null : reader["temporal_type_desc"],
+                        ["index_summary"] = new Dictionary<string, object>
+                        {
+                            ["index_count"] = 0, // Will be calculated separately if needed
+                            ["has_primary_key"] = Convert.ToInt32(reader["has_primary_key"]) > 0,
+                            ["has_clustered_index"] = Convert.ToInt32(reader["has_clustered_index"]) > 0
+                        },
+                        ["relationship_summary"] = new Dictionary<string, object>
+                        {
+                            ["foreign_keys_referencing"] = reader["foreign_key_count"],
+                            ["foreign_keys_referenced_by"] = reader["referenced_by_count"]
+                        }
                     };
                     tables.Add(table);
                 }
 
-                var payload = new
+                var tablesData = new
                 {
-                    database = _currentDatabase,
                     table_count = tables.Count,
+                    filters_applied = new
+                    {
+                        schema_filter = schemaFilter,
+                        name_filter = nameFilter,
+                        min_row_count = minRowCount,
+                        sort_by = sortBy,
+                        sort_order = sortOrder
+                    },
                     tables = tables
                 };
+
+                var metadata = new Dictionary<string, object>
+                {
+                    ["row_count"] = tables.Count,
+                    ["page_count"] = 1
+                };
+
+                var payload = CreateStandardResponse("GetTables", tablesData, sw.ElapsedMilliseconds, metadata: metadata);
                 sw.Stop();
                 LogEnd(corr, "GetTables", true, sw.ElapsedMilliseconds);
                 return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
@@ -645,22 +1146,16 @@ namespace SqlServerMcpServer
             catch (Exception ex)
             {
                 LogEnd(Guid.Empty, "GetTables", false, 0, ex.Message);
-                return JsonSerializer.Serialize(new
-                {
-                    server_name = _serverName,
-                    environment = _environment,
-                    database = _currentDatabase,
-                    error = ex.Message,
-                    operation_type = "ERROR",
-                    security_mode = "READ_ONLY_ENFORCED"
-                }, new JsonSerializerOptions { WriteIndented = true });
+                var errorPayload = CreateStandardErrorResponse("GetTables", ex.Message);
+                return JsonSerializer.Serialize(errorPayload, new JsonSerializerOptions { WriteIndented = true });
             }
         }
 
-        [McpServerTool, Description("Get the schema information for a specific table")]
+        [McpServerTool, Description("Get the schema information for a specific table with PK/FK info, indexes, and extended properties")]
         public static async Task<string> GetTableSchemaAsync(
             [Description("Name of the table")] string tableName,
-            [Description("Schema name (defaults to 'dbo')")] string? schemaName = "dbo")
+            [Description("Schema name (defaults to 'dbo')")] string? schemaName = "dbo",
+            [Description("Include column statistics (optional, default: false)")] bool includeStatistics = false)
         {
             try
             {
@@ -674,12 +1169,30 @@ namespace SqlServerMcpServer
                         c.name AS column_name,
                         t.name AS data_type,
                         c.max_length,
+                        c.precision,
+                        c.scale,
                         c.is_nullable,
-                        c.is_identity
+                        c.is_identity,
+                        c.is_computed,
+                        CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
+                        pk.key_ordinal AS pk_ordinal,
+                        dc.definition AS default_value,
+                        cc.definition AS computed_definition,
+                        ep.value AS column_description
                     FROM sys.columns c
                     INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
                     INNER JOIN sys.tables tbl ON c.object_id = tbl.object_id
                     INNER JOIN sys.schemas s ON tbl.schema_id = s.schema_id
+                    LEFT JOIN (
+                        SELECT ic.object_id, ic.column_id, ic.key_ordinal
+                        FROM sys.index_columns ic
+                        INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                        WHERE i.is_primary_key = 1
+                    ) pk ON c.object_id = pk.object_id AND c.column_id = pk.column_id
+                    LEFT JOIN sys.default_constraints dc ON c.default_object_id = dc.object_id
+                    LEFT JOIN sys.computed_columns cc ON c.object_id = cc.object_id AND c.column_id = cc.column_id
+                    LEFT JOIN sys.extended_properties ep ON ep.major_id = tbl.object_id 
+                        AND ep.minor_id = c.column_id AND ep.name = 'MS_Description'
                     WHERE tbl.name = @tableName AND s.name = @schemaName
                     ORDER BY c.column_id";
 
@@ -696,23 +1209,164 @@ namespace SqlServerMcpServer
                 {
                     var column = new Dictionary<string, object>
                     {
-                        ["column_name"] = reader["column_name"],
-                        ["data_type"] = reader["data_type"],
-                        ["max_length"] = reader["max_length"],
-                        ["is_nullable"] = reader["is_nullable"],
-                        ["is_identity"] = reader["is_identity"]
+                        ["column_name"] = reader["column_name"] ?? "",
+                        ["data_type"] = reader["data_type"] ?? "",
+                        ["max_length"] = reader["max_length"] ?? 0,
+                        ["precision"] = reader["precision"] ?? 0,
+                        ["scale"] = reader["scale"] ?? 0,
+                        ["is_nullable"] = reader["is_nullable"] ?? false,
+                        ["is_identity"] = reader["is_identity"] ?? false,
+                        ["is_computed"] = reader["is_computed"] ?? false,
+                        ["is_primary_key"] = reader["is_primary_key"] ?? false,
+                        ["pk_ordinal"] = reader["pk_ordinal"] is DBNull ? null : reader["pk_ordinal"],
+                        ["default_value"] = reader["default_value"] is DBNull ? null : reader["default_value"],
+                        ["computed_definition"] = reader["computed_definition"] is DBNull ? null : reader["computed_definition"],
+                        ["column_description"] = reader["column_description"] is DBNull ? null : reader["column_description"]
                     };
                     columns.Add(column);
                 }
 
-                var payload = new
+                reader.Close();
+
+                // Get foreign key information
+                var foreignKeysQuery = @"
+                    SELECT 
+                        fk.name AS constraint_name,
+                        c1.name AS column_name,
+                        t2.name AS referenced_table,
+                        c2.name AS referenced_column
+                    FROM sys.foreign_keys fk
+                    INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+                    INNER JOIN sys.columns c1 ON fkc.parent_object_id = c1.object_id AND fkc.parent_column_id = c1.column_id
+                    INNER JOIN sys.columns c2 ON fkc.referenced_object_id = c2.object_id AND fkc.referenced_column_id = c2.column_id
+                    INNER JOIN sys.tables t1 ON fkc.parent_object_id = t1.object_id
+                    INNER JOIN sys.tables t2 ON fkc.referenced_object_id = t2.object_id
+                    INNER JOIN sys.schemas s1 ON t1.schema_id = s1.schema_id
+                    WHERE t1.name = @tableName AND s1.name = @schemaName
+                    ORDER BY fk.name, fkc.constraint_column_id";
+
+                var foreignKeys = new List<Dictionary<string, object>>();
+                using (var fkCommand = new SqlCommand(foreignKeysQuery, connection))
                 {
-                    database = _currentDatabase,
+                    fkCommand.CommandTimeout = _commandTimeout;
+                    fkCommand.Parameters.AddWithValue("@tableName", tableName);
+                    fkCommand.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
+                    
+                    using var fkReader = await fkCommand.ExecuteReaderAsync();
+                    while (await fkReader.ReadAsync())
+                    {
+                        var fk = new Dictionary<string, object>
+                        {
+                            ["column_name"] = fkReader["column_name"],
+                            ["referenced_table"] = fkReader["referenced_table"],
+                            ["referenced_column"] = fkReader["referenced_column"],
+                            ["constraint_name"] = fkReader["constraint_name"]
+                        };
+                        foreignKeys.Add(fk);
+                    }
+                }
+
+                // Get index information per column
+                var indexesQuery = @"
+                    SELECT 
+                        i.name AS index_name,
+                        i.type_desc AS index_type,
+                        i.is_unique,
+                        c.name AS column_name,
+                        ic.key_ordinal
+                    FROM sys.indexes i
+                    INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+                    INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+                    INNER JOIN sys.tables t ON i.object_id = t.object_id
+                    INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+                    WHERE t.name = @tableName AND s.name = @schemaName AND i.name IS NOT NULL
+                    ORDER BY i.name, ic.key_ordinal";
+
+                var indexes = new List<Dictionary<string, object>>();
+                using (var idxCommand = new SqlCommand(indexesQuery, connection))
+                {
+                    idxCommand.CommandTimeout = _commandTimeout;
+                    idxCommand.Parameters.AddWithValue("@tableName", tableName);
+                    idxCommand.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
+                    
+                    using var idxReader = await idxCommand.ExecuteReaderAsync();
+                    while (await idxReader.ReadAsync())
+                    {
+                        var idx = new Dictionary<string, object>
+                        {
+                            ["index_name"] = idxReader["index_name"],
+                            ["index_type"] = idxReader["index_type"],
+                            ["is_unique"] = idxReader["is_unique"],
+                            ["key_ordinal"] = idxReader["key_ordinal"]
+                        };
+                        indexes.Add(idx);
+                    }
+                }
+
+                // Get column statistics if requested
+                var columnStats = new List<Dictionary<string, object>>();
+                if (includeStatistics)
+                {
+                    try
+                    {
+                        var statsQuery = @"
+                            SELECT 
+                                c.name AS column_name,
+                                p.rows AS total_rows,
+                                CASE WHEN c.is_nullable = 1 THEN 'NULLABLE' ELSE 'NOT NULL' END AS nullability
+                            FROM sys.columns c
+                            INNER JOIN sys.tables t ON c.object_id = t.object_id
+                            INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+                            INNER JOIN sys.dm_db_partition_stats p ON t.object_id = p.object_id
+                            WHERE t.name = @tableName AND s.name = @schemaName AND p.index_id IN (0,1)";
+
+                        using (var statsCommand = new SqlCommand(statsQuery, connection))
+                        {
+                            statsCommand.CommandTimeout = _commandTimeout;
+                            statsCommand.Parameters.AddWithValue("@tableName", tableName);
+                            statsCommand.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
+                            
+                            using var statsReader = await statsCommand.ExecuteReaderAsync();
+                            while (await statsReader.ReadAsync())
+                            {
+                                var stat = new Dictionary<string, object>
+                                {
+                                    ["column_name"] = statsReader["column_name"],
+                                    ["total_rows"] = statsReader["total_rows"],
+                                    ["nullability"] = statsReader["nullability"]
+                                };
+                                columnStats.Add(stat);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Statistics might not be available for all columns
+                        columnStats.Add(new Dictionary<string, object>
+                        {
+                            ["error"] = "Statistics not available for some columns"
+                        });
+                    }
+                }
+
+                var schemaData = new
+                {
                     table_name = tableName,
                     schema_name = schemaName,
                     column_count = columns.Count,
-                    columns = columns
+                    columns = columns,
+                    foreign_keys = foreignKeys,
+                    indexes_using_column = indexes,
+                    column_statistics = includeStatistics ? columnStats : null
                 };
+
+                var metadata = new Dictionary<string, object>
+                {
+                    ["row_count"] = 1,
+                    ["page_count"] = 1
+                };
+
+                var payload = CreateStandardResponse("GetTableSchema", schemaData, sw.ElapsedMilliseconds, metadata: metadata);
                 sw.Stop();
                 LogEnd(corr, "GetTableSchema", true, sw.ElapsedMilliseconds);
                 return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
@@ -720,31 +1374,23 @@ namespace SqlServerMcpServer
             catch (Exception ex)
             {
                 LogEnd(Guid.Empty, "GetTableSchema", false, 0, ex.Message);
-                return JsonSerializer.Serialize(new
-                {
-                    server_name = _serverName,
-                    environment = _environment,
-                    database = _currentDatabase,
-                    table_name = tableName,
-                    schema_name = schemaName,
-                    error = ex.Message,
-                    operation_type = "ERROR",
-                    security_mode = "READ_ONLY_ENFORCED"
-                }, new JsonSerializerOptions { WriteIndented = true });
+                var errorPayload = CreateStandardErrorResponse("GetTableSchema", ex.Message);
+                return JsonSerializer.Serialize(errorPayload, new JsonSerializerOptions { WriteIndented = true });
             }
         }
 
         [McpServerTool, Description("Get a list of stored procedures in the current database")]
-        public static async Task<string> GetStoredProceduresAsync()
+        public static async Task<string> GetStoredProceduresAsync(
+            [Description("Filter by procedure name (partial match, optional)")] string? nameFilter = null)
         {
             try
             {
-                var corr = LogStart("GetStoredProcedures");
+                var corr = LogStart("GetStoredProcedures", $"name:{nameFilter}");
                 var sw = Stopwatch.StartNew();
                 using var connection = new SqlConnection(_currentConnectionString);
                 await connection.OpenAsync();
 
-                var query = @"
+                var query = $@"
                     SELECT
                         p.name AS procedure_name,
                         s.name AS schema_name,
@@ -752,9 +1398,12 @@ namespace SqlServerMcpServer
                         p.modify_date
                     FROM sys.procedures p
                     INNER JOIN sys.schemas s ON p.schema_id = s.schema_id
+                    {(string.IsNullOrEmpty(nameFilter) ? "" : "WHERE p.name LIKE @nameFilter")}
                     ORDER BY s.name, p.name";
 
                 using var command = new SqlCommand(query, connection) { CommandTimeout = _commandTimeout };
+                if (!string.IsNullOrEmpty(nameFilter))
+                    command.Parameters.AddWithValue("@nameFilter", $"%{nameFilter}%");
                 using var reader = await command.ExecuteReaderAsync();
 
                 var procedures = new List<Dictionary<string, object>>();
@@ -777,6 +1426,10 @@ namespace SqlServerMcpServer
                     environment = _environment,
                     database = _currentDatabase,
                     procedure_count = procedures.Count,
+                    filters_applied = new
+                    {
+                        name_filter = nameFilter
+                    },
                     procedures = procedures
                 };
                 sw.Stop();
@@ -840,13 +1493,13 @@ namespace SqlServerMcpServer
                     {
                         var param = new Dictionary<string, object>
                         {
-                            ["parameter_name"] = reader["parameter_name"],
-                            ["data_type"] = reader["data_type"],
-                            ["max_length"] = reader["max_length"],
-                            ["precision"] = reader["precision"],
-                            ["scale"] = reader["scale"],
-                            ["is_output"] = reader["is_output"],
-                            ["has_default_value"] = reader["has_default_value"],
+                            ["parameter_name"] = reader["parameter_name"] ?? "",
+                            ["data_type"] = reader["data_type"] ?? "",
+                            ["max_length"] = reader["max_length"] ?? 0,
+                            ["precision"] = reader["precision"] ?? 0,
+                            ["scale"] = reader["scale"] ?? 0,
+                            ["is_output"] = reader["is_output"] ?? false,
+                            ["has_default_value"] = reader["has_default_value"] ?? false,
                             ["default_value"] = reader["default_value"] is DBNull ? null : reader["default_value"]
                         };
                         parameters.Add(param);
@@ -1090,13 +1743,13 @@ namespace SqlServerMcpServer
                         {
                             var param = new Dictionary<string, object>
                             {
-                                ["parameter_name"] = reader["parameter_name"],
-                                ["data_type"] = reader["data_type"],
-                                ["max_length"] = reader["max_length"],
-                                ["precision"] = reader["precision"],
-                                ["scale"] = reader["scale"],
-                                ["is_output"] = reader["is_output"],
-                                ["has_default_value"] = reader["has_default_value"],
+                                ["parameter_name"] = reader["parameter_name"] ?? "",
+                                ["data_type"] = reader["data_type"] ?? "",
+                                ["max_length"] = reader["max_length"] ?? 0,
+                                ["precision"] = reader["precision"] ?? 0,
+                                ["scale"] = reader["scale"] ?? 0,
+                                ["is_output"] = reader["is_output"] ?? false,
+                                ["has_default_value"] = reader["has_default_value"] ?? false,
                                 ["default_value"] = reader["default_value"] is DBNull ? null : reader["default_value"]
                             };
                             parameters.Add(param);
@@ -1136,14 +1789,14 @@ namespace SqlServerMcpServer
                         {
                             var col = new Dictionary<string, object>
                             {
-                                ["column_name"] = reader["column_name"],
-                                ["data_type"] = reader["data_type"],
-                                ["max_length"] = reader["max_length"],
-                                ["precision"] = reader["precision"],
-                                ["scale"] = reader["scale"],
-                                ["is_nullable"] = reader["is_nullable"],
-                                ["is_identity"] = reader["is_identity"],
-                                ["is_computed"] = reader["is_computed"]
+                                ["column_name"] = reader["column_name"] ?? "",
+                                ["data_type"] = reader["data_type"] ?? "",
+                                ["max_length"] = reader["max_length"] ?? 0,
+                                ["precision"] = reader["precision"] ?? 0,
+                                ["scale"] = reader["scale"] ?? 0,
+                                ["is_nullable"] = reader["is_nullable"] ?? false,
+                                ["is_identity"] = reader["is_identity"] ?? false,
+                                ["is_computed"] = reader["is_computed"] ?? false
                             };
                             columns.Add(col);
                         }

@@ -1,31 +1,39 @@
-## Quick Context
-- SQL Server MCP server built with the official C# SDK; `SqlServerMcpServer/Program.cs` wires Serilog and the stdio transport, then hosts the tools.
-- All tools live in `SqlServerMcpServer/SqlServerMcpServer.cs` as static methods on `SqlServerTools` marked with `[McpServerTool]` plus `[Description]` on each parameter for MCP metadata.
+## Overview
+- `SqlServerMcpServer/Program.cs` boots the MCP host (`WithStdioServerTransport`) and wires Serilog to daily-rolled files under `SqlServerMcpServer/logs/mcp-server-*.log` (7-day retention, no console output beyond startup).
+- All MCP tools live in `SqlServerMcpServer/SqlServerMcpServer.cs` as `[McpServerTool]` static methods on `SqlServerTools`; every parameter needs a `[Description]` attribute for MCP metadata.
+- Static helpers (`CreateStandardResponse`, `CreateStandardErrorResponse`, `CreateStandardBlockedResponse`) centralize payload shape; new tools should lean on them for consistent metadata.
 
-## Runtime & Configuration
-- Static fields cache `_currentConnectionString`, `_currentDatabase`, `_serverName`, `_environment`, and `_commandTimeout`; they hydrate from env vars first, then `appsettings.json` (searched in multiple locations), then defaults.
-- `SwitchDatabase` vettes connectivity before swapping `_currentConnectionString`; reuse `CreateConnectionStringForDatabase` when you need to hop back to `master` (see `GetDatabasesAsync`).
-- Respect the `SQLSERVER_COMMAND_TIMEOUT` override and keep new connections created with `_currentConnectionString` so the active database context persists between calls.
+## State & Configuration
+- `_currentConnectionString`, `_currentDatabase`, `_serverName`, `_environment`, and `_commandTimeout` hydrate in that file’s static constructor: environment variables take priority, then the first `appsettings.json` found in `AppContext.BaseDirectory`, `SqlServerMcpServer/appsettings.json`, or repo root, then defaults.
+- `SwitchDatabase` always sanity-checks the target by opening a test `SqlConnection`; use `CreateConnectionStringForDatabase` to pivot to `master` (see `GetDatabasesAsync`).
+- Honor the `SQLSERVER_COMMAND_TIMEOUT` override and ensure any new ADO calls set `CommandTimeout = _commandTimeout` so the active database context and timeout remain in sync.
 
-## Safety & Query Handling
-- Every data-reading endpoint calls `IsReadOnlyQuery` before executing SQL; it strips comments, blocks multi-statements, DDL/DML keywords, and SELECT INTO. Do not bypass it for ad hoc SQL.
-- `ExecuteQueryAsync` clamps the optional `maxRows` to ≤100 and relies on `ApplyTopLimit` to insert or cap `TOP` clauses; follow the same pattern for any new query-running tool.
-- When a query is rejected or fails, mirror the structured error payload shape (`server_name`, `environment`, `database`, `security_mode`, etc.) so clients get consistent messaging.
+## Logging & Telemetry
+- Use `LogStart`/`LogEnd` to wrap tool bodies; they emit correlation IDs, operation names, and elapsed time via Serilog (file sink). Skip bespoke logging unless you extend these helpers.
+- `Console.Error.WriteLine` is used only in the static constructor for early diagnostics; avoid additional console writes to keep the MCP transport clean.
+- When catching exceptions, prefer `CreateStandardErrorResponse` so clients get `security_mode`, `operation`, and troubleshooting hints.
 
-## Logging & Responses
-- Structured logging uses `LogStart`/`LogEnd` + `StderrJsonSink` so everything goes to `stderr` in JSON; keep stdout quiet (the startup banner in `Program.cs` is the lone exception).
-- Return values are serialized with `JsonSerializer.Serialize(..., WriteIndented = true)`; include standard metadata fields (`server_name`, `environment`, `database`, `operation_type`) alongside domain data.
+## SQL Safety & Query Limits
+- `IsReadOnlyQuery` strips comments, blocks multi-statements, and rejects DDL/DML, `SELECT INTO`, `USE`, etc.; every dynamic SQL execution path must pass through it unless the query text is fully hard-coded.
+- `ExecuteQueryAsync` clamps `maxRows`, `pageSize`, and pagination to ≤1000 rows, then routes through `ApplyPaginationAndLimit` to inject `TOP`/`OFFSET` clauses while preserving existing limits—reuse that helper for any result-set tooling.
+- Blocked queries return `BLOCKED_OPERATION` payloads with the original SQL and guidance; match that behavior if you add new validation rules.
+
+## Response Shape & Metadata
+- Standard success payloads include `server_name`, `environment`, `database`, `operation`, UTC `timestamp`, execution timing, `security_mode`, plus `data`/`metadata` collections—mirror this to keep clients parsable.
+- List-oriented tools (`GetTablesAsync`, `GetDatabasesAsync`) embed filter echoes and row counts inside `data`; detail fetchers surface domain subsections like `procedure_info`, `parameters`, `dependencies`.
+- Error responses set `security_mode` to `READ_ONLY_ENFORCED` and provide `troubleshooting_steps`; extend existing switch expressions (e.g., SQL error codes) rather than inventing new formats.
 
 ## Tool Implementation Patterns
-- Wrap `SqlConnection`/`SqlCommand` in `using` and set `CommandTimeout = _commandTimeout`; this is visible in `GetTablesAsync`, `GetStoredProceduresAsync`, etc.
-- Reuse helper methods (`CreateConnectionStringForDatabase`, `GetDatabaseFromConnectionString`) rather than hand-parsing connection strings.
-- Shape new responses using existing examples: list-returning tools emit arrays of dictionaries, whereas detail endpoints (e.g. `GetStoredProcedureDetailsAsync`) return an object with `info`, `parameters`, `dependencies` sections.
+- Always wrap `SqlConnection`/`SqlCommand` in `using` blocks and use the cached `_currentConnectionString`; this keeps the selected database sticky across calls.
+- Prefer parameterized SQL for any user-provided filters (`nameFilter`, `schemaFilter`, etc.) and reuse the dynamic WHERE clause patterns already present.
+- For aggregate metadata (counts, sizes, backups), follow `GetDatabasesAsync`/`GetTablesAsync` examples: compute summaries first, then enrich each row before serializing.
 
 ## Developer Workflow
-- Restore/build/run with standard `dotnet restore`, `dotnet build`, `dotnet run` from the repo root; the project auto-loads nearby `appsettings.json` files and honors environment overrides.
-- Use `claude_desktop_config.json` and `NAMED_SERVERS.md` as runnable examples for wiring this MCP server into Claude Desktop or other MCP clients.
+- Build/run from the repo root with `dotnet restore`, `dotnet build`, `dotnet run`; `dotnet run --project SqlServerMcpServer/SqlServerMcpServer.csproj` works equivalently.
+- `claude_desktop_config.json` and `NAMED_SERVERS.md` demonstrate wiring this MCP server into Claude Desktop or other MCP clients—update them when you add new tool surfaces.
+- No automated tests exist; validate changes against a live SQL Server instance and watch the `logs/` folder for structured Serilog output when debugging.
 
-## When Extending
-- Maintain read-only guarantees: if you introduce metadata queries that generate SQL, still validate via `IsReadOnlyQuery` unless the query is fully hard-coded.
-- New tools should document parameter descriptions and update `README.md` so operators know the expanded surface area.
-- Keep structured logging coverage: surround new work with `LogStart`/`LogEnd`, pass any contextual identifiers via the optional `context` argument, and bubble exceptions into the JSON response instead of throwing.
+## Extending Safely
+- Keep new tools read-only: even metadata lookups should either use hard-coded SQL or run through `IsReadOnlyQuery` before execution.
+- Thread new Serilog context (like database names) through the optional `context` argument on `LogStart` when it aids debugging.
+- Document new tools in `README.md` and ensure their payload schemas follow the established patterns so downstream MCP clients stay compatible.
