@@ -2,10 +2,12 @@ using Microsoft.Data.SqlClient;
 using ModelContextProtocol.Server;
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Data;
 using Serilog;
 
 namespace SqlServerMcpServer
@@ -791,7 +793,235 @@ namespace SqlServerMcpServer
             }
         }
 
+<<<<<<< HEAD
         private static string ApplyPaginationAndLimit(string query, int limit, int offset)
+=======
+        [McpServerTool, Description("Execute a read-only SQL query with formatting and parameters (SRS: read_query)")]
+        public static async Task<string> ReadQueryAsync(
+            [Description("T-SQL SELECT statement (read-only)")] string query,
+            [Description("Per-call timeout in seconds (default 30, range 1–300)")] int? timeout = null,
+            [Description("Maximum rows to return (default 1000, range 1–10000)")] int? max_rows = 1000,
+            [Description("Result format: json | csv | table (HTML)")] string? format = "json",
+            [Description("Named parameters to bind (e.g., { id: 42 })")] Dictionary<string, object>? parameters = null,
+            [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null)
+        {
+            try
+            {
+                var corr = LogStart("ReadQuery", query);
+                var sw = Stopwatch.StartNew();
+
+                // Enforce read-only
+                if (!IsReadOnlyQuery(query, out string blockedOperation))
+                {
+                    var errorMessage = blockedOperation switch
+                    {
+                        "INSERT" => "❌ INSERT operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "UPDATE" => "❌ UPDATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "DELETE" => "❌ DELETE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "DROP" => "❌ DROP operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "CREATE" => "❌ CREATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "ALTER" => "❌ ALTER operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "TRUNCATE" => "❌ TRUNCATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "EXEC" or "EXECUTE" => "❌ EXEC/EXECUTE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "MERGE" => "❌ MERGE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "BULK" => "❌ BULK operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "GRANT" => "❌ GRANT operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "REVOKE" => "❌ REVOKE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "DENY" => "❌ DENY operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "SELECT_INTO" => "❌ SELECT INTO is not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        "MULTIPLE_STATEMENTS" => "❌ Multiple statements are not allowed. Submit a single SELECT statement.",
+                        "NON_SELECT_STATEMENT" => "❌ Only SELECT statements are allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                        _ => $"❌ {blockedOperation} operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing."
+                    };
+
+                    return JsonSerializer.Serialize(new
+                    {
+                        server_name = _serverName,
+                        environment = _environment,
+                        database = _currentDatabase,
+                        error = errorMessage,
+                        blocked_operation = blockedOperation,
+                        blocked_query = query,
+                        operation_type = "BLOCKED",
+                        security_mode = "READ_ONLY_ENFORCED",
+                        allowed_operations = new[] { "SELECT queries for data retrieval", "Database listing", "Table schema inspection", "Database switching" },
+                        help = "This MCP server is configured for READ-ONLY access to prevent accidental data modification. Use SELECT statements to query data.",
+                        format = format?.ToLowerInvariant()
+                    }, new JsonSerializerOptions { WriteIndented = true });
+                }
+
+                // Validate and normalize parameters
+                var fmt = string.IsNullOrWhiteSpace(format) ? "json" : format.Trim().ToLowerInvariant();
+                if (fmt != "json" && fmt != "csv" && fmt != "table")
+                {
+                    return JsonSerializer.Serialize(new
+                    {
+                        server_name = _serverName,
+                        environment = _environment,
+                        database = _currentDatabase,
+                        error = "Invalid format. Allowed values: json, csv, table",
+                        operation_type = "VALIDATION_ERROR",
+                        security_mode = "READ_ONLY_ENFORCED"
+                    }, new JsonSerializerOptions { WriteIndented = true });
+                }
+
+                int appliedTimeout = _commandTimeout;
+                if (timeout.HasValue)
+                {
+                    appliedTimeout = Math.Clamp(timeout.Value, 1, 300);
+                }
+
+                int requestedMax = max_rows ?? 1000;
+                int appliedMaxRows = Math.Clamp(requestedMax, 1, 10000);
+
+                var finalQuery = ApplyTopLimit(query, appliedMaxRows);
+
+                using var connection = new SqlConnection(_currentConnectionString);
+                await connection.OpenAsync();
+
+                using var command = new SqlCommand(finalQuery, connection)
+                {
+                    CommandTimeout = appliedTimeout
+                };
+
+                // Bind parameters if provided
+                if (parameters is not null)
+                {
+                    foreach (var kvp in parameters)
+                    {
+                        var name = kvp.Key?.Trim();
+                        if (string.IsNullOrEmpty(name)) continue;
+                        if (!name.StartsWith("@")) name = "@" + name;
+                        var value = kvp.Value ?? DBNull.Value;
+                        command.Parameters.AddWithValue(name, value);
+                    }
+                }
+
+                using var reader = await command.ExecuteReaderAsync();
+
+                // Column metadata
+                var columns = new List<Dictionary<string, object>>();
+                var columnNames = new List<string>();
+                try
+                {
+                    var schema = reader.GetSchemaTable();
+                    if (schema is not null)
+                    {
+                        foreach (DataRow row in schema.Rows)
+                        {
+                            var name = row["ColumnName"]?.ToString() ?? string.Empty;
+                            var type = (row["DataType"] as Type)?.FullName ?? (row["DataType"]?.ToString() ?? "");
+                            var allowNull = row.Table.Columns.Contains("AllowDBNull") ? (row["AllowDBNull"] as bool? ?? false) : false;
+                            var size = row.Table.Columns.Contains("ColumnSize") ? (row["ColumnSize"] as int? ?? 0) : 0;
+                            columnNames.Add(name);
+                            columns.Add(new Dictionary<string, object>
+                            {
+                                ["name"] = name,
+                                ["data_type"] = type,
+                                ["allow_null"] = allowNull,
+                                ["size"] = size
+                            });
+                        }
+                    }
+                    else
+                    {
+                        for (int i = 0; i < reader.FieldCount; i++)
+                        {
+                            var name = reader.GetName(i);
+                            columnNames.Add(name);
+                            columns.Add(new Dictionary<string, object>
+                            {
+                                ["name"] = name,
+                                ["data_type"] = reader.GetFieldType(i).FullName ?? reader.GetFieldType(i).Name,
+                                ["allow_null"] = true,
+                                ["size"] = 0
+                            });
+                        }
+                    }
+                }
+                catch
+                {
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        var name = reader.GetName(i);
+                        columnNames.Add(name);
+                        columns.Add(new Dictionary<string, object>
+                        {
+                            ["name"] = name,
+                            ["data_type"] = reader.GetFieldType(i).FullName ?? reader.GetFieldType(i).Name,
+                            ["allow_null"] = true,
+                            ["size"] = 0
+                        });
+                    }
+                }
+
+                // Read results
+                var results = new List<Dictionary<string, object>>();
+                while (await reader.ReadAsync())
+                {
+                    var row = new Dictionary<string, object>();
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        var colName = reader.GetName(i);
+                        var value = reader.GetValue(i);
+                        row[colName] = value is DBNull ? null : value;
+                    }
+                    results.Add(row);
+                }
+
+                string? rendered = null;
+                char delim = ParseDelimiter(delimiter);
+                if (fmt == "csv")
+                {
+                    rendered = ToCsv(results, columnNames, delim);
+                }
+                else if (fmt == "table")
+                {
+                    rendered = ToHtmlTable(results, columnNames);
+                }
+
+                sw.Stop();
+                LogEnd(corr, "ReadQuery", true, sw.ElapsedMilliseconds);
+
+                // Ensure consistent typing for conditional result selection
+                object resultData = fmt == "json" ? (object)results : (object)(rendered ?? string.Empty);
+
+                var payload = new
+                {
+                    server_name = _serverName,
+                    environment = _environment,
+                    database = _currentDatabase,
+                    row_count = results.Count,
+                    elapsed_ms = sw.ElapsedMilliseconds,
+                    operation_type = "READ_QUERY",
+                    security_mode = "READ_ONLY_ENFORCED",
+                    format = fmt,
+                    columns,
+                    applied_limit = appliedMaxRows,
+                    result = resultData
+                };
+
+                return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (Exception ex)
+            {
+                LogEnd(Guid.Empty, "ReadQuery", false, 0, ex.Message);
+                return JsonSerializer.Serialize(new
+                {
+                    server_name = _serverName,
+                    environment = _environment,
+                    database = _currentDatabase,
+                    error = $"SQL Error: {ex.Message}",
+                    operation_type = "ERROR",
+                    security_mode = "READ_ONLY_ENFORCED",
+                    help = "Check your SQL syntax and ensure you're only using SELECT statements.",
+                    format = format?.ToLowerInvariant()
+                }, new JsonSerializerOptions { WriteIndented = true });
+            }
+        }
+
+        private static string ApplyTopLimit(string query, int maxRows)
+>>>>>>> 0c8100b5a19414a6346c7804e9335af53a1388fd
         {
             try
             {
@@ -883,6 +1113,7 @@ namespace SqlServerMcpServer
             }
         }
 
+<<<<<<< HEAD
         private static string GetErrorSuggestion(int errorNumber)
         {
             return errorNumber switch
@@ -987,6 +1218,96 @@ namespace SqlServerMcpServer
             [Description("Minimum row count filter (optional)")] int? minRowCount = null,
             [Description("Sort by: 'NAME', 'SIZE', or 'ROWS' (default: 'NAME')")] string? sortBy = "NAME",
             [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC")
+=======
+        private static char ParseDelimiter(string? delimiter)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(delimiter)) return ',';
+                var d = delimiter.Trim();
+                if (string.Equals(d, "tab", StringComparison.OrdinalIgnoreCase)) return '\t';
+                if (string.Equals(d, "\\t", StringComparison.OrdinalIgnoreCase)) return '\t';
+                return d.Length == 1 ? d[0] : ',';
+            }
+            catch { return ','; }
+        }
+
+        private static string ToCsv(List<Dictionary<string, object>> rows, List<string> columns, char delimiter)
+        {
+            var sb = new StringBuilder();
+            // Header
+            for (int i = 0; i < columns.Count; i++)
+            {
+                if (i > 0) sb.Append(delimiter);
+                sb.Append(EscapeCsv(columns[i], delimiter));
+            }
+            sb.AppendLine();
+
+            foreach (var row in rows)
+            {
+                for (int i = 0; i < columns.Count; i++)
+                {
+                    if (i > 0) sb.Append(delimiter);
+                    var col = columns[i];
+                    row.TryGetValue(col, out var value);
+                    var s = value is null ? null : Convert.ToString(value);
+                    sb.Append(EscapeCsv(s, delimiter));
+                }
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        private static string EscapeCsv(string? value, char delimiter)
+        {
+            if (value is null) return "NULL";
+            var needsQuote = value.Contains('"') || value.Contains('\n') || value.Contains('\r') || value.Contains(delimiter) || (value.Length > 0 && (value[0] == ' ' || value[^1] == ' '));
+            if (!needsQuote) return value;
+            var escaped = value.Replace("\"", "\"\"");
+            return "\"" + escaped + "\"";
+        }
+
+        private static string ToHtmlTable(List<Dictionary<string, object>> rows, List<string> columns)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<table>");
+            sb.Append("<thead><tr>");
+            foreach (var col in columns)
+            {
+                sb.Append("<th>").Append(EscapeHtml(col)).Append("</th>");
+            }
+            sb.Append("</tr></thead>");
+            sb.Append("<tbody>");
+            foreach (var row in rows)
+            {
+                sb.Append("<tr>");
+                foreach (var col in columns)
+                {
+                    row.TryGetValue(col, out var value);
+                    var s = value is null ? "NULL" : Convert.ToString(value) ?? string.Empty;
+                    sb.Append("<td>").Append(EscapeHtml(s)).Append("</td>");
+                }
+                sb.Append("</tr>");
+            }
+            sb.Append("</tbody></table>");
+            return sb.ToString();
+        }
+
+        private static string EscapeHtml(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value ?? string.Empty;
+            return value
+                .Replace("&", "&amp;")
+                .Replace("<", "&lt;")
+                .Replace(">", "&gt;")
+                .Replace("\"", "&quot;")
+                .Replace("'", "&#39;");
+        }
+
+        [McpServerTool, Description("Get a list of all tables in the current database")]
+        public static async Task<string> GetTablesAsync()
+>>>>>>> 0c8100b5a19414a6346c7804e9335af53a1388fd
         {
             try
             {
