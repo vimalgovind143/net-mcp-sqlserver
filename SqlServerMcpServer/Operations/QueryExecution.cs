@@ -54,8 +54,7 @@ namespace SqlServerMcpServer.Operations
                 // Generate query warnings
                 var warnings = QueryValidator.GenerateQueryWarnings(query, effectiveOffset);
 
-                using var connection = SqlConnectionManager.CreateConnection();
-                await connection.OpenAsync();
+                using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync();
 
                 // Enable statistics if requested
                 if (includeStatistics)
@@ -271,8 +270,7 @@ namespace SqlServerMcpServer.Operations
 
                 var finalQuery = QueryFormatter.ApplyTopLimit(query, appliedMaxRows);
 
-                using var connection = SqlConnectionManager.CreateConnection();
-                await connection.OpenAsync();
+                using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync();
 
                 using var command = new SqlCommand(finalQuery, connection)
                 {

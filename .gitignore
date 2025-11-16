@@ -375,3 +375,7 @@ appsettings*.json
 
 /logs
 *.log
+
+
+
+.docs

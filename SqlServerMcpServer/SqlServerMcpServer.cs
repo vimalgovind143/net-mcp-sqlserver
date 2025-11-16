@@ -330,5 +330,97 @@ namespace SqlServerMcpServer
         {
             return await CodeGeneration.GenerateModelClass(tableName, schemaName, className, @namespace, includeValidation, includeAnnotations);
         }
+
+        // ==================== Performance & Reliability Diagnostics ====================
+
+        [McpServerTool, Description("Get cache metrics and performance statistics")]
+        public static string GetCacheMetrics()
+        {
+            try
+            {
+                var cacheService = new CacheService();
+                var metrics = cacheService.GetMetrics();
+                var cacheInfo = cacheService.GetCacheInfo();
+
+                var payload = new
+                {
+                    server_name = SqlConnectionManager.ServerName,
+                    environment = SqlConnectionManager.Environment,
+                    database = SqlConnectionManager.CurrentDatabase,
+                    cache_metrics = new
+                    {
+                        hits = metrics.Hits,
+                        misses = metrics.Misses,
+                        total_operations = metrics.TotalOperations,
+                        hit_ratio_percent = Math.Round(metrics.HitRatio, 2),
+                        timestamp_utc = metrics.Timestamp
+                    },
+                    cache_configuration = new
+                    {
+                        enabled = cacheInfo.Enabled,
+                        default_ttl_seconds = cacheInfo.DefaultTTLSeconds,
+                        schema_ttl_seconds = cacheInfo.SchemaTTLSeconds,
+                        procedure_ttl_seconds = cacheInfo.ProcedureTTLSeconds,
+                        current_entries_count = cacheInfo.CurrentEntriesCount,
+                        cached_key_prefixes = cacheInfo.CachedKeyPrefixes
+                    },
+                    operation_type = "DIAGNOSTICS",
+                    security_mode = "READ_ONLY_ENFORCED"
+                };
+
+                return ResponseFormatter.ToJson(payload);
+            }
+            catch (Exception ex)
+            {
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetCacheMetrics");
+                var response = ResponseFormatter.CreateErrorContextResponse(context, 0);
+                return ResponseFormatter.ToJson(response);
+            }
+        }
+
+        [McpServerTool, Description("Get connection pool statistics and resilience metrics")]
+        public static string GetConnectionPoolStats()
+        {
+            try
+            {
+                var poolStats = ConnectionPoolManager.GetPoolStatistics();
+
+                var payload = new
+                {
+                    server_name = SqlConnectionManager.ServerName,
+                    environment = SqlConnectionManager.Environment,
+                    database = SqlConnectionManager.CurrentDatabase,
+                    connection_pool_statistics = new
+                    {
+                        total_attempts = poolStats.TotalAttempts,
+                        successful_connections = poolStats.SuccessfulConnections,
+                        failed_connections = poolStats.FailedConnections,
+                        retried_connections = poolStats.RetriedConnections,
+                        success_rate_percent = Math.Round(poolStats.SuccessRate, 2),
+                        retry_rate_percent = Math.Round(poolStats.RetryRate, 2)
+                    },
+                    connection_resilience_settings = new
+                    {
+                        retry_enabled = true,
+                        circuit_breaker_enabled = true,
+                        max_retry_attempts = 3,
+                        initial_retry_delay_ms = 100,
+                        max_retry_delay_ms = 5000,
+                        circuit_breaker_threshold = 5,
+                        circuit_breaker_break_duration_seconds = 30
+                    },
+                    operation_type = "DIAGNOSTICS",
+                    security_mode = "READ_ONLY_ENFORCED"
+                };
+
+                return ResponseFormatter.ToJson(payload);
+            }
+            catch (Exception ex)
+            {
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetConnectionPoolStats");
+                var response = ResponseFormatter.CreateErrorContextResponse(context, 0);
+                return ResponseFormatter.ToJson(response);
+            }
+        }
     }
 }
