@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "sqlserver": {
-      "command": "dotnet",
-      "args": [
-        "run",
-        "--project",
-        "c:\\Users\\vgovind\\source\\repos\\net-mcp-sqlserver\\net-mcp-sqlserver\\SqlServerMcpServer\\SqlServerMcpServer.csproj"
-      ],
+      "command": "c:\\Users\\vgovind\\source\\repos\\net-mcp-sqlserver\\net-mcp-sqlserver\\SqlServerMcpServer\\publish\\SqlServerMcpServer.exe",
+      "args": [],
       "env": {
         "SQLSERVER_CONNECTION_STRING": "Server=localhost;Database=YourDatabase;User Id=your_username;Password=your_password;TrustServerCertificate=true;"
       }

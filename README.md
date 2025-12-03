@@ -79,7 +79,7 @@ This feature is particularly useful when working with multiple databases on the 
 
 ### Prerequisites
 
-- .NET 10.0 SDK (preview)
+- .NET 10.0 SDK
 - SQL Server (local or remote)
 - Access to the target database
 
@@ -424,9 +424,9 @@ To test the server locally:
 
 ## Dependencies
 
-- `ModelContextProtocol` (0.4.0-preview.3) - Official MCP C# SDK
+- `ModelContextProtocol` (0.4.1-preview.1) - Official MCP C# SDK
 - `Microsoft.Data.SqlClient` (5.2.2) - SQL Server connectivity
-- `Microsoft.Extensions.Hosting` (10.0.0-preview.3.25171.5) - Host infrastructure
+- `Microsoft.Extensions.Hosting` (10.0.0) - Host infrastructure
 
 ## License
 
