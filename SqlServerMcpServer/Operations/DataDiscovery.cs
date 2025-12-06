@@ -389,8 +389,8 @@ namespace SqlServerMcpServer.Operations
                     database = SqlConnectionManager.CurrentDatabase,
                     table_name = tableName,
                     schema_name = schemaName,
-                    column_statistics = columnStats,
-                    parameters = new
+                    statistics = columnStats,
+                    filters_applied = new
                     {
                         column_name = columnName,
                         include_histogram = includeHistogram,

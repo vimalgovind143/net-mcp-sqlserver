@@ -5,6 +5,7 @@
 This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the official C# SDK. It provides read-only tools for interacting with Microsoft SQL Server databases, designed for integration with AI assistants like Claude Desktop.
 
 ### Core Principles
+
 - **READ-ONLY Security**: All operations enforce SELECT-only access - no data modifications allowed
 - **Structured Responses**: All responses are JSON-formatted with consistent structure
 - **Comprehensive Error Handling**: Rich error context with troubleshooting steps and suggestions
@@ -66,6 +67,7 @@ net-mcp-sqlserver/
 ## Architecture Patterns
 
 ### 1. MCP Tool Registration
+
 Tools are registered using the `[McpServerTool]` attribute and `[Description]` attributes:
 
 ```csharp
@@ -93,6 +95,7 @@ return ResponseFormatter.ToJson(response);
 ```
 
 ### 3. Error Handling Pattern
+
 Always use `ErrorHelper` to create rich error contexts:
 
 ```csharp
@@ -117,6 +120,7 @@ catch (Exception ex)
 ```
 
 ### 4. Logging Pattern
+
 Use `LoggingHelper` for correlation-based logging:
 
 ```csharp
@@ -137,21 +141,31 @@ catch
 
 ## Security Guidelines
 
-### Blocked Operations
-The `QueryValidator` class blocks these SQL operations:
-- **DDL**: CREATE, ALTER, DROP, TRUNCATE
-- **DML**: INSERT, UPDATE, DELETE, MERGE
-- **Execution**: EXEC, EXECUTE, BULK
-- **Permissions**: GRANT, REVOKE, DENY
-- **System**: USE, SET, DBCC, BACKUP, RESTORE
-- **Object Creation**: SELECT INTO
-- **Multiple Statements**: Semicolon-separated queries (except trailing)
+### Validation Flow (QueryValidator.IsReadOnlyQuery)
+
+- Strips block/line comments, normalizes whitespace, uppercases the query.
+- Blocks multiple statements (allows only a single trailing semicolon).
+- Blocks dangerous keywords:
+  - **DDL**: CREATE, ALTER, DROP, TRUNCATE
+  - **DML**: INSERT, UPDATE, DELETE, MERGE
+  - **Execution**: EXEC, EXECUTE, BULK
+  - **Permissions**: GRANT, REVOKE, DENY
+  - **System/Config**: USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, SP_CONFIGURE
+  - **Object Creation**: SELECT INTO
+- Requires queries to start with SELECT or CTEs (`WITH ... SELECT`); otherwise blocked as NON_SELECT_STATEMENT.
 
 ### Allowed Operations
-- SELECT queries (with CTEs via WITH)
+
+- SELECT queries (with CTEs via WITH) that do not include blocked operations
 - Database listing and switching
 - Schema inspection
 - Table/procedure/view introspection
+
+### Query Warnings (QueryValidator.GenerateQueryWarnings)
+
+- Adds advisory warnings (not blockers) when:
+  - No WHERE/TOP clause is present (may return large result set)
+  - Manual pagination detected (offset provided without OFFSET/FETCH clause)
 
 ---
 
@@ -164,11 +178,13 @@ string? schemaName = "dbo"  // Nullable parameter with default
 ```
 
 ### 2. Async/Await
+
 - Use `async Task<string>` for database operations
 - Use `Async` suffix for async methods
 - Always use `ConfigureAwait(false)` is NOT required (console app)
 
 ### 3. Parameter Validation
+
 Validate parameters early and return structured errors:
 ```csharp
 if (string.IsNullOrWhiteSpace(tableName))
@@ -179,12 +195,14 @@ if (string.IsNullOrWhiteSpace(tableName))
 ```
 
 ### 4. SQL Parameters
+
 Always use parameterized queries to prevent SQL injection:
 ```csharp
 command.Parameters.AddWithValue("@param", value);
 ```
 
 ### 5. Resource Disposal
+
 Use `using` statements for all disposable resources:
 ```csharp
 using var connection = SqlConnectionManager.CreateConnection();
@@ -197,14 +215,17 @@ using var reader = await command.ExecuteReaderAsync();
 ## Testing Guidelines
 
 ### Test Structure
+
 Tests are organized by the class they test (e.g., `QueryValidatorTests.cs` tests `QueryValidator.cs`).
 
 ### Testing Frameworks
+
 - **xUnit**: Test framework
 - **Moq**: Mocking framework
 - **FluentAssertions**: Assertion library
 
 ### Test Patterns
+
 ```csharp
 [Fact]
 public void MethodName_Condition_ExpectedResult()
@@ -221,6 +242,7 @@ public void MethodName_Condition_ExpectedResult()
 ```
 
 ### Running Tests
+
 ```bash
 dotnet test
 ```
@@ -230,6 +252,7 @@ dotnet test
 ## Configuration
 
 ### Environment Variables
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SQLSERVER_CONNECTION_STRING` | Database connection string | localhost/master |
@@ -241,6 +264,7 @@ dotnet test
 | `CACHE_TTL_PROCEDURE_SECONDS` | Procedure cache TTL | 300 |
 
 ### Configuration Precedence
+
 1. Environment variables (highest)
 2. appsettings.json
 3. Built-in defaults (lowest)
@@ -314,11 +338,13 @@ public static async Task<string> NewToolImplementationAsync(string param)
 3. **Add unit tests** in `SqlServerMcpServer.Tests/`
 
 ### Modifying Query Validation
+
 Edit `Security/QueryValidator.cs`:
 - `IsReadOnlyQuery()` - Add/modify blocked keywords
 - `GetBlockedOperationMessage()` - Add error messages
 
 ### Adding New Error Codes
+
 1. Add to `Utilities/ErrorCode.cs`
 2. Add mapping in `ErrorHelper.MapSqlErrorNumber()`
 3. Add suggestions and troubleshooting steps

@@ -255,8 +255,22 @@ namespace SqlServerMcpServer.Operations
                         "ReadQuery"
                     );
                     validationContext.SuggestedFixes.Add("Use format: 'json' (default), 'csv', or 'table'");
-                    return ResponseFormatter.ToJson(
-                        ResponseFormatter.CreateErrorContextResponse(validationContext, sw.ElapsedMilliseconds));
+
+                    var validationPayload = new
+                    {
+                        server_name = SqlConnectionManager.ServerName,
+                        environment = SqlConnectionManager.Environment,
+                        database = SqlConnectionManager.CurrentDatabase,
+                        operation_type = "VALIDATION_ERROR",
+                        error = new
+                        {
+                            code = validationContext.Code.GetDescription(),
+                            message = validationContext.Message,
+                            suggested_fixes = validationContext.SuggestedFixes
+                        }
+                    };
+
+                    return ResponseFormatter.ToJson(validationPayload);
                 }
 
                 int appliedTimeout = SqlConnectionManager.CommandTimeout;

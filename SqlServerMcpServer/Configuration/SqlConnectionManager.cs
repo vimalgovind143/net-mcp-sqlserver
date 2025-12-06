@@ -14,7 +14,7 @@ namespace SqlServerMcpServer.Configuration
         private static string _currentConnectionString =
             System.Environment.GetEnvironmentVariable("SQLSERVER_CONNECTION_STRING")
             ?? GetConfigValue("SqlServer", "ConnectionString")
-            ?? "Server=localhost;Database=master;Trusted_Connection=true;TrustServerCertificate=true;";
+            ?? "Server=localhost,14333;Database=master;User Id=sa;Password=Your_Str0ng_Pass!;TrustServerCertificate=true;";
 
         private static string _currentDatabase = GetDatabaseFromConnectionString(_currentConnectionString);
         private static string _serverName = System.Environment.GetEnvironmentVariable("MCP_SERVER_NAME") ?? "SQL Server MCP";
@@ -122,11 +122,15 @@ namespace SqlServerMcpServer.Configuration
             try
             {
                 var baseDir = AppContext.BaseDirectory;
+                var currentDir = Directory.GetCurrentDirectory();
+                var parentDir = Directory.GetParent(currentDir)?.FullName;
                 var candidatePaths = new[]
                 {
                     Path.Combine(baseDir, "appsettings.json"),
-                    Path.Combine(Directory.GetCurrentDirectory(), "SqlServerMcpServer", "appsettings.json"),
-                    Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json")
+                    Path.Combine(currentDir, "SqlServerMcpServer", "appsettings.json"),
+                    Path.Combine(parentDir ?? string.Empty, "SqlServerMcpServer", "appsettings.json"),
+                    Path.Combine(currentDir, "appsettings.json"),
+                    Path.Combine(parentDir ?? string.Empty, "appsettings.json")
                 };
 
                 var path = candidatePaths.FirstOrDefault(File.Exists);

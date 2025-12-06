@@ -36,6 +36,19 @@ namespace SqlServerMcpServer.Operations
             try
             {
                 var corr = LoggingHelper.LogStart("GenerateModelClass", $"table:{tableName}");
+                // Support fully-qualified table name input like 'schema.table'
+                var resolvedSchema = schemaName ?? "dbo";
+                var resolvedTableName = tableName;
+                if (tableName.Contains('.'))
+                {
+                    var parts = tableName.Split('.', 2, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 2)
+                    {
+                        resolvedSchema = parts[0];
+                        resolvedTableName = parts[1];
+                    }
+                }
+
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
@@ -72,8 +85,8 @@ namespace SqlServerMcpServer.Operations
                     ORDER BY c.column_id";
 
                 using var command = new SqlCommand(schemaQuery, connection);
-                command.Parameters.AddWithValue("@TableName", tableName);
-                command.Parameters.AddWithValue("@SchemaName", schemaName ?? "dbo");
+                command.Parameters.AddWithValue("@TableName", resolvedTableName);
+                command.Parameters.AddWithValue("@SchemaName", resolvedSchema);
 
                 using var reader = await command.ExecuteReaderAsync();
                 
@@ -99,11 +112,11 @@ namespace SqlServerMcpServer.Operations
 
                 if (!columns.Any())
                 {
-                    throw new ArgumentException($"Table '{schemaName}.{tableName}' not found or has no columns");
+                    throw new ArgumentException($"Table '{resolvedSchema}.{resolvedTableName}' not found or has no columns");
                 }
 
-                var finalClassName = className ?? ToPascalCase(tableName);
-                var generatedCode = GenerateCSharpModel(columns, finalClassName, @namespace, includeValidation, includeAnnotations);
+                var finalClassName = className ?? ToPascalCase(resolvedTableName);
+                var generatedCode = GenerateCSharpModel(columns, finalClassName, @namespace, includeValidation, includeAnnotations, resolvedTableName);
 
                 var payload = new
                 {
@@ -111,11 +124,26 @@ namespace SqlServerMcpServer.Operations
                     environment = SqlConnectionManager.Environment,
                     database = SqlConnectionManager.CurrentDatabase,
                     generated_code = generatedCode,
+                    class_code = generatedCode, // compatibility with tests expecting this property
+                    table_info = new
+                    {
+                        table_name = $"{resolvedSchema}.{resolvedTableName}",
+                        schema_name = resolvedSchema,
+                        class_name = finalClassName,
+                        column_count = columns.Count
+                    },
+                    options = new
+                    {
+                        class_name = className,
+                        @namespace = @namespace,
+                        include_validation = includeValidation,
+                        include_annotations = includeAnnotations
+                    },
+                    // Keep existing metadata/parameters for backward compatibility
                     metadata = new
                     {
-
-                        table_name = tableName,
-                        schema_name = schemaName,
+                        table_name = $"{resolvedSchema}.{resolvedTableName}",
+                        schema_name = resolvedSchema,
                         class_name = finalClassName,
                         language = "CSharp",
                         @namespace = @namespace,
@@ -152,7 +180,7 @@ namespace SqlServerMcpServer.Operations
             }
         }
 
-        private static string GenerateCSharpModel(List<Dictionary<string, object>> columns, string className, string @namespace, bool includeValidation, bool includeAnnotations)
+        private static string GenerateCSharpModel(List<Dictionary<string, object>> columns, string className, string @namespace, bool includeValidation, bool includeAnnotations, string tableNameForAttribute)
         {
             var sb = new StringBuilder();
             
@@ -171,7 +199,7 @@ namespace SqlServerMcpServer.Operations
             sb.AppendLine($"namespace {@namespace}");
             sb.AppendLine("{");
             if (includeAnnotations)
-                sb.AppendLine($"    [Table(\"{className}\")]");
+                sb.AppendLine($"    [Table(\"{tableNameForAttribute}\")]");
             sb.AppendLine($"    public class {className}");
             sb.AppendLine("    {");
 
