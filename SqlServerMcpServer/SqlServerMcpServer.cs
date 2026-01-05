@@ -63,45 +63,49 @@ namespace SqlServerMcpServer
         }
 
         /// <summary>
-        /// Execute a read-only SQL query on the current database with pagination and metadata
+        /// Execute a SQL query on the current database with pagination and metadata
         /// </summary>
-        /// <param name="query">The SQL query to execute (SELECT statements only)</param>
+        /// <param name="query">The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)</param>
         /// <param name="maxRows">Maximum rows to return (default 100, max 1000)</param>
         /// <param name="offset">Offset for pagination (default: 0)</param>
         /// <param name="pageSize">Page size for pagination (default: 100, max: 1000)</param>
         /// <param name="includeStatistics">Include query execution statistics (optional, default: false)</param>
+        /// <param name="confirmUnsafeOperation">Confirm execution of DELETE/TRUNCATE operations (default: false)</param>
         /// <returns>Query results as JSON string</returns>
-        [McpServerTool, Description("Execute a read-only SQL query on the current database with pagination and metadata")]
+        [McpServerTool, Description("Execute a SQL query on the current database with pagination and metadata (supports SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")]
         public static async Task<string> ExecuteQueryAsync(
-            [Description("The SQL query to execute (SELECT statements only)")] string query,
+            [Description("The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")] string query,
             [Description("Maximum rows to return (default 100, max 1000)")] int? maxRows = 100,
             [Description("Offset for pagination (default: 0)")] int? offset = 0,
             [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
-            [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false)
+            [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false,
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false)
         {
-            return await QueryExecution.ExecuteQueryAsync(query, maxRows, offset, pageSize, includeStatistics);
+            return await QueryExecution.ExecuteQueryAsync(query, maxRows, offset, pageSize, includeStatistics, confirmUnsafeOperation);
         }
 
         /// <summary>
-        /// Execute a read-only SQL query with formatting and parameters (SRS: read_query)
+        /// Execute a SQL query with formatting and parameters (SRS: read_query)
         /// </summary>
-        /// <param name="query">T-SQL SELECT statement (read-only)</param>
+        /// <param name="query">T-SQL query (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)</param>
         /// <param name="timeout">Per-call timeout in seconds (default 30, range 1–300)</param>
         /// <param name="max_rows">Maximum rows to return (default 1000, range 1–10000)</param>
         /// <param name="format">Result format: json | csv | table (HTML)</param>
         /// <param name="parameters">Named parameters to bind (e.g., { id: 42 })</param>
         /// <param name="delimiter">CSV delimiter (default ','. Use 'tab' or \t for tab)</param>
+        /// <param name="confirm_unsafe_operation">Confirm execution of DELETE/TRUNCATE operations (default: false)</param>
         /// <returns>Query results as JSON string</returns>
-        [McpServerTool, Description("Execute a read-only SQL query with formatting and parameters (SRS: read_query)")]
+        [McpServerTool, Description("Execute a SQL query with formatting and parameters (SRS: read_query, supports DML with confirmation for DELETE/TRUNCATE)")]
         public static async Task<string> ReadQueryAsync(
-            [Description("T-SQL SELECT statement (read-only)")] string query,
+            [Description("T-SQL query (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")] string query,
             [Description("Per-call timeout in seconds (default 30, range 1–300)")] int? timeout = null,
             [Description("Maximum rows to return (default 1000, range 1–10000)")] int? max_rows = 1000,
             [Description("Result format: json | csv | table (HTML)")] string? format = "json",
             [Description("Named parameters to bind (e.g., { id: 42 })")] Dictionary<string, object>? parameters = null,
-            [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null)
+            [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null,
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirm_unsafe_operation = false)
         {
-            return await QueryExecution.ReadQueryAsync(query, timeout, max_rows, format, parameters, delimiter);
+            return await QueryExecution.ReadQueryAsync(query, timeout, max_rows, format, parameters, delimiter, confirm_unsafe_operation);
         }
 
         /// <summary>
