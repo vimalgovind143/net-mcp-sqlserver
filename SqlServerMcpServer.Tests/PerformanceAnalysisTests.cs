@@ -7,10 +7,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class PerformanceAnalysisTests
     {
+        private static readonly bool ServerStateAvailable = TestDatabaseHelper.HasViewServerState;
+
         [Fact]
         public async Task GetMissingIndexes_AllSuggestions_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetMissingIndexes(
                 tableName: null, 
                 minImpact: 10.0m, 
@@ -34,6 +37,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetMissingIndexes_WithTableFilter_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetMissingIndexes(
                 tableName: "test_table", 
                 minImpact: 10.0m, 
@@ -53,6 +57,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetMissingIndexes_WithMinImpact_FiltersResults()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetMissingIndexes(
                 tableName: null, 
                 minImpact: 50.0m, 
@@ -72,6 +77,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetMissingIndexes_ValidatesStructure()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetMissingIndexes(
                 tableName: null, 
                 minImpact: 10.0m, 
@@ -99,6 +105,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetQueryExecutionPlan_EstimatedPlan_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetQueryExecutionPlan(
                 query: "SELECT * FROM sys.tables", 
                 planType: "ESTIMATED", 
@@ -120,6 +127,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetQueryExecutionPlan_WithAnalysis_IncludesWarnings()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetQueryExecutionPlan(
                 query: "SELECT * FROM sys.tables", 
                 planType: "ESTIMATED", 
@@ -139,6 +147,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetQueryExecutionPlan_ShowplanXml_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetQueryExecutionPlan(
                 query: "SELECT * FROM sys.tables", 
                 planType: "SHOWPLAN_XML", 
@@ -157,6 +166,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexFragmentation_AllIndexes_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetIndexFragmentation(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -181,6 +191,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexFragmentation_WithTableFilter_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetIndexFragmentation(
                 tableName: "test_table", 
                 schemaName: "dbo", 
@@ -201,6 +212,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexFragmentation_WithMinFragmentation_FiltersResults()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetIndexFragmentation(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -221,6 +233,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexFragmentation_ValidatesStructure()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetIndexFragmentation(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -248,6 +261,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetWaitStats_DefaultParams_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetWaitStats(
                 topN: 20, 
                 includeSystemWaits: false, 
@@ -270,6 +284,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetWaitStats_WithTopN_LimitsResults()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetWaitStats(
                 topN: 10, 
                 includeSystemWaits: false, 
@@ -289,6 +304,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetWaitStats_IncludeSystemWaits_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetWaitStats(
                 topN: 20, 
                 includeSystemWaits: true, 
@@ -308,6 +324,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetWaitStats_ValidatesStructure()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetWaitStats(
                 topN: 20, 
                 includeSystemWaits: false, 
@@ -335,6 +352,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetWaitStats_IncludesServerInfo()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await PerformanceAnalysis.GetWaitStats(
                 topN: 20, 
                 includeSystemWaits: false, 

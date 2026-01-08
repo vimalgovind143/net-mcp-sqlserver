@@ -383,14 +383,14 @@ namespace SqlServerMcpServer.Operations
                         format = fmt
                     };
 
-                    var payload = ResponseFormatter.CreateStandardResponse(
+                    var dmlPayload = ResponseFormatter.CreateStandardResponse(
                         "ReadQuery",
                         dmlData,
                         sw.ElapsedMilliseconds,
                         warnings: queryWarnings.Any() ? queryWarnings : null,
                         securityMode: dmlSecurityMode);
 
-                    return ResponseFormatter.ToJson(payload);
+                    return ResponseFormatter.ToJson(dmlPayload);
                 }
 
                 using var reader = await command.ExecuteReaderAsync();

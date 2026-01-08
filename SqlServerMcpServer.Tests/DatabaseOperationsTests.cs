@@ -10,10 +10,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class DatabaseOperationsTests
     {
+        private static readonly bool DatabaseAvailable = TestDatabaseHelper.IsDatabaseAvailable;
+
         [Fact]
         public async Task GetServerHealthAsync_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetServerHealthAsync();
 
             // Assert
@@ -29,6 +32,7 @@ namespace SqlServerMcpServer.Tests
         public void GetCurrentDatabase_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = DatabaseOperations.GetCurrentDatabase();
 
             // Assert
@@ -76,6 +80,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithDefaultParameters_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync();
 
             // Assert
@@ -91,6 +96,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithIncludeSystemDatabases_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync(includeSystemDatabases: true);
 
             // Assert
@@ -106,6 +112,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithMinSizeFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync(minSizeMB: 10);
 
             // Assert
@@ -121,6 +128,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithStateFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync(stateFilter: "ONLINE");
 
             // Assert
@@ -136,6 +144,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithNameFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync(nameFilter: "master");
 
             // Assert
@@ -151,6 +160,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithInvalidStateFilter_DefaultsToOnline()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync(stateFilter: "INVALID");
 
             // Assert
@@ -166,6 +176,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabasesAsync_WithAllParameters_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DatabaseOperations.GetDatabasesAsync(
                 includeSystemDatabases: true,
                 minSizeMB: 1,
