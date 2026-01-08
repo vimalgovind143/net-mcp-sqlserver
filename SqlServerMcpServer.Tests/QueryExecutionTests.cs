@@ -302,6 +302,58 @@ namespace SqlServerMcpServer.Tests
         }
 
         [Fact]
+        public async Task ReadQueryAsync_WithDelete_NoConfirmation_ReturnsConfirmationRequired()
+        {
+            // Arrange
+            var query = "DELETE FROM TestTable";
+
+            var result = await QueryExecution.ReadQueryAsync(query, confirm_unsafe_operation: false);
+
+            Assert.NotNull(result);
+            Assert.True(result.Length > 0);
+
+            var jsonDocument = System.Text.Json.JsonDocument.Parse(result);
+            var root = jsonDocument.RootElement;
+
+            Assert.True(root.TryGetProperty("security_mode", out var securityMode));
+            Assert.Equal("DML_WITH_CONFIRMATION", securityMode.GetString());
+
+            Assert.True(root.TryGetProperty("error", out var error));
+            Assert.True(error.TryGetProperty("details", out var details));
+            Assert.True(details.TryGetProperty("blocked_operation", out var blockedOperation));
+            Assert.Equal("DELETE", blockedOperation.GetString());
+            Assert.True(details.TryGetProperty("requires_confirmation", out var requiresConfirmation));
+            Assert.True(requiresConfirmation.GetBoolean());
+            Assert.True(details.TryGetProperty("confirmation_message", out _));
+        }
+
+        [Fact]
+        public async Task ReadQueryAsync_WithTruncate_NoConfirmation_ReturnsConfirmationRequired()
+        {
+            // Arrange
+            var query = "TRUNCATE TABLE TestTable";
+
+            var result = await QueryExecution.ReadQueryAsync(query, confirm_unsafe_operation: false);
+
+            Assert.NotNull(result);
+            Assert.True(result.Length > 0);
+
+            var jsonDocument = System.Text.Json.JsonDocument.Parse(result);
+            var root = jsonDocument.RootElement;
+
+            Assert.True(root.TryGetProperty("security_mode", out var securityMode));
+            Assert.Equal("DML_WITH_CONFIRMATION", securityMode.GetString());
+
+            Assert.True(root.TryGetProperty("error", out var error));
+            Assert.True(error.TryGetProperty("details", out var details));
+            Assert.True(details.TryGetProperty("blocked_operation", out var blockedOperation));
+            Assert.Equal("TRUNCATE", blockedOperation.GetString());
+            Assert.True(details.TryGetProperty("requires_confirmation", out var requiresConfirmation));
+            Assert.True(requiresConfirmation.GetBoolean());
+            Assert.True(details.TryGetProperty("confirmation_message", out _));
+        }
+
+        [Fact]
         public async Task ReadQueryAsync_WithParameters_ReturnsValidJson()
         {
             // Arrange
