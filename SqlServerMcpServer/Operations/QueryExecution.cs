@@ -14,21 +14,23 @@ namespace SqlServerMcpServer.Operations
     public static class QueryExecution
     {
         /// <summary>
-        /// Execute a read-only SQL query on the current database with pagination and metadata
+        /// Execute a SQL query on the current database with pagination and metadata
         /// </summary>
-        /// <param name="query">The SQL query to execute (SELECT statements only)</param>
+        /// <param name="query">The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)</param>
         /// <param name="maxRows">Maximum rows to return (default 100, max 1000)</param>
         /// <param name="offset">Offset for pagination (default: 0)</param>
         /// <param name="pageSize">Page size for pagination (default: 100, max: 1000)</param>
         /// <param name="includeStatistics">Include query execution statistics (optional, default: false)</param>
+        /// <param name="confirmUnsafeOperation">Confirm execution of DELETE/TRUNCATE operations (default: false)</param>
         /// <returns>Query results as JSON string</returns>
-        [McpServerTool, Description("Execute a read-only SQL query on the current database with pagination and metadata")]
+        [McpServerTool, Description("Execute a SQL query on the current database with pagination and metadata (supports SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")]
         public static async Task<string> ExecuteQueryAsync(
-            [Description("The SQL query to execute (SELECT statements only)")] string query,
+            [Description("The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")] string query,
             [Description("Maximum rows to return (default 100, max 1000)")] int? maxRows = 100,
             [Description("Offset for pagination (default: 0)")] int? offset = 0,
             [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
-            [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false)
+            [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false,
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -43,10 +45,11 @@ namespace SqlServerMcpServer.Operations
                 // Use the smaller of maxRows and pageSize
                 var limit = Math.Min(effectiveMaxRows, effectivePageSize);
 
-                // Validate read-only operation
-                if (!QueryValidator.IsReadOnlyQuery(query, out string blockedOperation))
+                // Validate query using new DML-aware validation
+                if (!QueryValidator.IsDmlQueryAllowed(query, confirmUnsafeOperation, out string? blockedOperation))
                 {
-                    var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation, query);
+                    var requiresConfirmation = QueryValidator.RequiresConfirmation(query);
+                    var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation!, query, requiresConfirmation);
                     var blockedPayload = ResponseFormatter.CreateBlockedContextResponse(context, sw.ElapsedMilliseconds);
                     return ResponseFormatter.ToJson(blockedPayload);
                 }
@@ -66,23 +69,67 @@ namespace SqlServerMcpServer.Operations
                     await statsCommand.ExecuteNonQueryAsync();
                 }
 
-                // Apply pagination and limits
-                var finalQuery = QueryFormatter.ApplyPaginationAndLimit(query, limit, effectiveOffset);
-
-                using var command = new SqlCommand(finalQuery, connection)
-                {
-                    CommandTimeout = SqlConnectionManager.CommandTimeout
-                };
+                // Apply pagination and limits (only for SELECT queries)
+                var queryType = QueryValidator.ClassifyQuery(query);
+                var finalQuery = queryType == QueryType.ReadOnly 
+                    ? QueryFormatter.ApplyPaginationAndLimit(query, limit, effectiveOffset) 
+                    : query;
 
                 // Execute query and get metadata
                 var queryMetadata = new Dictionary<string, object>();
                 var columnInfo = new List<Dictionary<string, object>>();
+                var results = new List<Dictionary<string, object>>();
+                var rowCount = 0;
 
-                using var reader = await command.ExecuteReaderAsync();
-
-                // Get column information - only if we have a result set
-                if (reader.HasRows)
+                // For DML operations, use ExecuteNonQuery directly
+                if (queryType != QueryType.ReadOnly)
                 {
+                    using var dmlCommand = new SqlCommand(finalQuery, connection)
+                    {
+                        CommandTimeout = SqlConnectionManager.CommandTimeout
+                    };
+                    rowCount = await dmlCommand.ExecuteNonQueryAsync();
+
+                    queryMetadata["rows_affected"] = rowCount;
+                    queryMetadata["columns_returned"] = 0;
+
+                    queryMetadata["execution_time_ms"] = sw.ElapsedMilliseconds;
+                    queryMetadata["query_hash"] = query.GetHashCode().ToString();
+
+                    var dmlData = new
+                    {
+                        query_metadata = queryMetadata,
+                        rows_affected = rowCount
+                    };
+
+                    var securityMode = queryType switch
+                    {
+                        QueryType.Delete or QueryType.Truncate => confirmUnsafeOperation ? "DML_WITH_CONFIRMATION" : "READ_ONLY",
+                        QueryType.Insert or QueryType.Update => "DML_ALLOWED",
+                        _ => "READ_ONLY"
+                    };
+
+                    var payload = ResponseFormatter.CreateStandardResponse(
+                        "ExecuteQuery",
+                        dmlData,
+                        sw.ElapsedMilliseconds,
+                        warnings: warnings.Any() ? warnings : null,
+                        securityMode: securityMode);
+
+                    sw.Stop();
+                    LoggingHelper.LogEnd(corr, "ExecuteQuery", true, sw.ElapsedMilliseconds);
+                    return ResponseFormatter.ToJson(payload);
+                }
+                else
+                {
+                    // For SELECT queries, use ExecuteReader
+                    using var selectCommand = new SqlCommand(finalQuery, connection)
+                    {
+                        CommandTimeout = SqlConnectionManager.CommandTimeout
+                    };
+                    using var reader = await selectCommand.ExecuteReaderAsync();
+
+                    // Get column information
                     for (int i = 0; i < reader.FieldCount; i++)
                     {
                         var column = new Dictionary<string, object>
@@ -90,95 +137,96 @@ namespace SqlServerMcpServer.Operations
                             ["name"] = reader.GetName(i),
                             ["data_type"] = reader.GetDataTypeName(i),
                             ["sql_type"] = reader.GetFieldType(i).Name,
-                            ["is_nullable"] = true, // Default to true for schema info
-                            ["max_length"] = 0 // Would need schema query for accurate info
+                            ["is_nullable"] = true,
+                            ["max_length"] = 0
                         };
                         columnInfo.Add(column);
                     }
-                }
 
-                // Read results
-                var results = new List<Dictionary<string, object>>();
-                var rowCount = 0;
-
-                while (await reader.ReadAsync() && rowCount < limit)
-                {
-                    var row = new Dictionary<string, object>();
-                    for (int i = 0; i < reader.FieldCount; i++)
+                    // Read results
+                    while (await reader.ReadAsync() && rowCount < limit)
                     {
-                        var columnName = reader.GetName(i);
-                        var value = reader.GetValue(i);
-                        row[columnName] = value is DBNull ? null : value;
-                    }
-                    results.Add(row);
-                    rowCount++;
-                }
-
-                reader.Close();
-
-                // Get execution statistics if requested
-                var statistics = new Dictionary<string, object>();
-                if (includeStatistics)
-                {
-                    try
-                    {
-                        // Reset statistics
-                        using var resetCommand = new SqlCommand("SET STATISTICS IO OFF; SET STATISTICS TIME OFF;", connection)
+                        var row = new Dictionary<string, object>();
+                        for (int i = 0; i < reader.FieldCount; i++)
                         {
-                            CommandTimeout = SqlConnectionManager.CommandTimeout
-                        };
-                        await resetCommand.ExecuteNonQueryAsync();
-
-                        // Note: In a real implementation, you would capture the statistics output
-                        // This is a simplified version
-                        statistics["logical_reads"] = "N/A";
-                        statistics["physical_reads"] = "N/A";
-                        statistics["cpu_time_ms"] = sw.ElapsedMilliseconds;
-                        statistics["elapsed_time_ms"] = sw.ElapsedMilliseconds;
+                            var columnName = reader.GetName(i);
+                            var value = reader.GetValue(i);
+                            row[columnName] = value is DBNull ? null : value;
+                        }
+                        results.Add(row);
+                        rowCount++;
                     }
-                    catch
+
+                    reader.Close();
+                    
+                    // Get execution statistics if requested
+                    var statistics = new Dictionary<string, object>();
+                    if (includeStatistics)
                     {
-                        statistics["error"] = "Statistics collection failed";
+                        try
+                        {
+                            // Reset statistics
+                            using var resetCommand = new SqlCommand("SET STATISTICS IO OFF; SET STATISTICS TIME OFF;", connection)
+                            {
+                                CommandTimeout = SqlConnectionManager.CommandTimeout
+                            };
+                            await resetCommand.ExecuteNonQueryAsync();
+
+                            // Note: In a real implementation, you would capture the statistics output
+                            // This is a simplified version
+                            statistics["logical_reads"] = "N/A";
+                            statistics["physical_reads"] = "N/A";
+                            statistics["cpu_time_ms"] = sw.ElapsedMilliseconds;
+                            statistics["elapsed_time_ms"] = sw.ElapsedMilliseconds;
+                        }
+                        catch
+                        {
+                            statistics["error"] = "Statistics collection failed";
+                        }
                     }
+
+                    // Build query metadata
+                    queryMetadata["execution_time_ms"] = sw.ElapsedMilliseconds;
+                    queryMetadata["rows_affected"] = rowCount;
+                    queryMetadata["columns_returned"] = reader.FieldCount;
+                    queryMetadata["query_hash"] = query.GetHashCode().ToString();
+
+                    // Calculate pagination info
+                    var pagination = new Dictionary<string, object>
+                    {
+                        ["current_page"] = effectiveOffset / effectivePageSize + 1,
+                        ["page_size"] = effectivePageSize,
+                        ["offset"] = effectiveOffset,
+                        ["has_more"] = rowCount == effectivePageSize
+                    };
+
+                    var queryData = new
+                    {
+                        query_metadata = queryMetadata,
+                        columns = columnInfo,
+                        pagination = pagination,
+                        statistics = includeStatistics ? statistics : null,
+                        data = results,
+                        applied_limit = limit
+                    };
+
+                    var recommendations = new List<string>();
+                    if (warnings.Any())
+                    {
+                        recommendations.Add("Consider optimizing your query for better performance");
+                    }
+
+                    var payload = ResponseFormatter.CreateStandardResponse(
+                        "ExecuteQuery",
+                        queryData,
+                        sw.ElapsedMilliseconds,
+                        warnings: warnings.Any() ? warnings : null,
+                        recommendations: recommendations);
+
+                    sw.Stop();
+                    LoggingHelper.LogEnd(corr, "ExecuteQuery", true, sw.ElapsedMilliseconds);
+                    return ResponseFormatter.ToJson(payload);
                 }
-
-                // Build query metadata
-                queryMetadata["execution_time_ms"] = sw.ElapsedMilliseconds;
-                queryMetadata["rows_affected"] = rowCount;
-                queryMetadata["columns_returned"] = reader.FieldCount;
-                queryMetadata["query_hash"] = query.GetHashCode().ToString();
-
-                // Calculate pagination info
-                var pagination = new Dictionary<string, object>
-                {
-                    ["current_page"] = effectiveOffset / effectivePageSize + 1,
-                    ["page_size"] = effectivePageSize,
-                    ["offset"] = effectiveOffset,
-                    ["has_more"] = rowCount == effectivePageSize
-                };
-
-                var queryData = new
-                {
-                    query_metadata = queryMetadata,
-                    columns = columnInfo,
-                    pagination = pagination,
-                    statistics = includeStatistics ? statistics : null,
-                    data = results,
-                    applied_limit = limit
-                };
-
-                var recommendations = new List<string>();
-                if (warnings.Any())
-                {
-                    recommendations.Add("Consider optimizing your query for better performance");
-                }
-
-                var payload = ResponseFormatter.CreateStandardResponse("ExecuteQuery", queryData, sw.ElapsedMilliseconds,
-                    warnings: warnings.Any() ? warnings : null, recommendations: recommendations);
-
-                sw.Stop();
-                LoggingHelper.LogEnd(corr, "ExecuteQuery", true, sw.ElapsedMilliseconds);
-                return ResponseFormatter.ToJson(payload);
             }
             catch (SqlException sqlEx)
             {
@@ -214,33 +262,36 @@ namespace SqlServerMcpServer.Operations
         }
 
         /// <summary>
-        /// Execute a read-only SQL query with formatting and parameters (SRS: read_query)
+        /// Execute a SQL query with formatting and parameters (SRS: read_query)
         /// </summary>
-        /// <param name="query">T-SQL SELECT statement (read-only)</param>
+        /// <param name="query">T-SQL query (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)</param>
         /// <param name="timeout">Per-call timeout in seconds (default 30, range 1–300)</param>
         /// <param name="max_rows">Maximum rows to return (default 1000, range 1–10000)</param>
         /// <param name="format">Result format: json | csv | table (HTML)</param>
         /// <param name="parameters">Named parameters to bind (e.g., { id: 42 })</param>
         /// <param name="delimiter">CSV delimiter (default ','. Use 'tab' or \t for tab)</param>
+        /// <param name="confirm_unsafe_operation">Confirm execution of DELETE/TRUNCATE operations (default: false)</param>
         /// <returns>Query results as JSON string</returns>
-        [McpServerTool, Description("Execute a read-only SQL query with formatting and parameters (SRS: read_query)")]
+        [McpServerTool, Description("Execute a SQL query with formatting and parameters (SRS: read_query, supports DML with confirmation for DELETE/TRUNCATE)")]
         public static async Task<string> ReadQueryAsync(
-            [Description("T-SQL SELECT statement (read-only)")] string query,
+            [Description("T-SQL query (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")] string query,
             [Description("Per-call timeout in seconds (default 30, range 1–300)")] int? timeout = null,
             [Description("Maximum rows to return (default 1000, range 1–10000)")] int? max_rows = 1000,
             [Description("Result format: json | csv | table (HTML)")] string? format = "json",
             [Description("Named parameters to bind (e.g., { id: 42 })")] Dictionary<string, object>? parameters = null,
-            [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null)
+            [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null,
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirm_unsafe_operation = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var corr = LoggingHelper.LogStart("ReadQuery", query);
 
-                // Enforce read-only
-                if (!QueryValidator.IsReadOnlyQuery(query, out string blockedOperation))
+                // Validate query using new DML-aware validation
+                if (!QueryValidator.IsDmlQueryAllowed(query, confirm_unsafe_operation, out string? blockedOperation))
                 {
-                    var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation, query);
+                    var requiresConfirmation = QueryValidator.RequiresConfirmation(query);
+                    var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation!, query, requiresConfirmation);
                     return ResponseFormatter.ToJson(
                         ResponseFormatter.CreateBlockedContextResponse(context, sw.ElapsedMilliseconds));
                 }
@@ -282,9 +333,15 @@ namespace SqlServerMcpServer.Operations
                 int requestedMax = max_rows ?? 1000;
                 int appliedMaxRows = Math.Clamp(requestedMax, 1, 10000);
 
-                var finalQuery = QueryFormatter.ApplyTopLimit(query, appliedMaxRows);
+                var queryType = QueryValidator.ClassifyQuery(query);
+                var finalQuery = queryType == QueryType.ReadOnly 
+                    ? QueryFormatter.ApplyTopLimit(query, appliedMaxRows) 
+                    : query;
 
                 using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync();
+
+                // Generate warnings for all query types
+                var queryWarnings = QueryValidator.GenerateQueryWarnings(query);
 
                 using var command = new SqlCommand(finalQuery, connection)
                 {
@@ -302,6 +359,38 @@ namespace SqlServerMcpServer.Operations
                         var value = kvp.Value ?? DBNull.Value;
                         command.Parameters.AddWithValue(name, value);
                     }
+                }
+
+                // For DML operations, use ExecuteNonQuery
+                if (queryType != QueryType.ReadOnly)
+                {
+                    var rowsAffected = await command.ExecuteNonQueryAsync();
+
+                    sw.Stop();
+                    LoggingHelper.LogEnd(corr, "ReadQuery", true, sw.ElapsedMilliseconds);
+
+                    var dmlSecurityMode = queryType switch
+                    {
+                        QueryType.Delete or QueryType.Truncate => confirm_unsafe_operation ? "DML_WITH_CONFIRMATION" : "READ_ONLY",
+                        QueryType.Insert or QueryType.Update => "DML_ALLOWED",
+                        _ => "READ_ONLY"
+                    };
+
+                    var dmlData = new
+                    {
+                        operation_type = queryType.ToString().ToUpperInvariant(),
+                        rows_affected = rowsAffected,
+                        format = fmt
+                    };
+
+                    var dmlPayload = ResponseFormatter.CreateStandardResponse(
+                        "ReadQuery",
+                        dmlData,
+                        sw.ElapsedMilliseconds,
+                        warnings: queryWarnings.Any() ? queryWarnings : null,
+                        securityMode: dmlSecurityMode);
+
+                    return ResponseFormatter.ToJson(dmlPayload);
                 }
 
                 using var reader = await command.ExecuteReaderAsync();
@@ -393,20 +482,20 @@ namespace SqlServerMcpServer.Operations
                 // Ensure consistent typing for conditional result selection
                 object resultData = fmt == "json" ? (object)results : (object)(rendered ?? string.Empty);
 
-                var payload = new
+                var readData = new
                 {
-                    server_name = SqlConnectionManager.ServerName,
-                    environment = SqlConnectionManager.Environment,
-                    database = SqlConnectionManager.CurrentDatabase,
                     row_count = results.Count,
-                    elapsed_ms = sw.ElapsedMilliseconds,
-                    operation_type = "READ_QUERY",
-                    security_mode = "READ_ONLY_ENFORCED",
                     format = fmt,
                     columns,
                     applied_limit = appliedMaxRows,
                     result = resultData
                 };
+
+                var payload = ResponseFormatter.CreateStandardResponse(
+                    "ReadQuery",
+                    readData,
+                    sw.ElapsedMilliseconds,
+                    warnings: queryWarnings.Any() ? queryWarnings : null);
 
                 return ResponseFormatter.ToJson(payload);
             }

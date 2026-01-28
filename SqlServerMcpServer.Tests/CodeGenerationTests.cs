@@ -7,10 +7,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class CodeGenerationTests
     {
+        private static readonly bool DatabaseAvailable = TestDatabaseHelper.IsDatabaseAvailable;
+
         [Fact]
         public async Task GenerateModelClass_DefaultParams_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -35,6 +38,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_CustomClassName_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -56,6 +60,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_CustomNamespace_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -77,6 +82,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_WithValidation_IncludesDataAnnotations()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -101,6 +107,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_WithAnnotations_IncludesTableAttribute()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -125,6 +132,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_WithoutValidation_ExcludesDataAnnotations()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -149,6 +157,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_ValidatesCodeStructure()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -181,6 +190,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_IncludesMetadata()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -205,6 +215,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_IncludesColumnCount()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -227,6 +238,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_HandlesCSharpKeywords()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -252,6 +264,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_IncludesServerInfo()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -273,6 +286,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GenerateModelClass_HandlesNullableTypes()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await CodeGeneration.GenerateModelClass(
                 tableName: "sys.tables", 
                 schemaName: "sys", 

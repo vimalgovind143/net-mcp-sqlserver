@@ -9,6 +9,8 @@ namespace SqlServerMcpServer.Tests
 {
     public class QueryExecutionTests
     {
+        private static readonly bool DatabaseAvailable = TestDatabaseHelper.IsDatabaseAvailable;
+
         [Fact]
         public async Task ExecuteQueryAsync_WithValidSelect_ReturnsValidJson()
         {
@@ -16,6 +18,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query);
 
             // Assert
@@ -34,6 +37,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT * FROM NonExistentTable";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query);
 
             // Assert
@@ -56,6 +60,7 @@ namespace SqlServerMcpServer.Tests
             var query = "INSERT INTO TestTable (Column1) VALUES ('Test')";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query);
 
             // Assert
@@ -79,6 +84,7 @@ namespace SqlServerMcpServer.Tests
             var query = "UPDATE TestTable SET Column1 = 'Updated'";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query);
 
             // Assert
@@ -102,6 +108,7 @@ namespace SqlServerMcpServer.Tests
             var query = "DELETE FROM TestTable";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query);
 
             // Assert
@@ -125,6 +132,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn UNION SELECT 2 UNION SELECT 3";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query, maxRows: 2);
 
             // Assert
@@ -143,6 +151,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn UNION SELECT 2 UNION SELECT 3";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query, offset: 1);
 
             // Assert
@@ -161,6 +170,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ExecuteQueryAsync(query, includeStatistics: true);
 
             // Assert
@@ -179,6 +189,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query);
 
             // Assert
@@ -197,6 +208,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, format: "json");
 
             // Assert
@@ -209,7 +221,8 @@ namespace SqlServerMcpServer.Tests
             
             // Verify format property
             var root = jsonDocument.RootElement;
-            Assert.True(root.TryGetProperty("format", out var format));
+            Assert.True(root.TryGetProperty("data", out var data));
+            Assert.True(data.TryGetProperty("format", out var format));
             Assert.Equal("json", format.GetString());
         }
 
@@ -220,6 +233,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, format: "csv");
 
             // Assert
@@ -232,7 +246,8 @@ namespace SqlServerMcpServer.Tests
             
             // Verify format property
             var root = jsonDocument.RootElement;
-            Assert.True(root.TryGetProperty("format", out var format));
+            Assert.True(root.TryGetProperty("data", out var data));
+            Assert.True(data.TryGetProperty("format", out var format));
             Assert.Equal("csv", format.GetString());
         }
 
@@ -243,6 +258,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, format: "table");
 
             // Assert
@@ -255,7 +271,8 @@ namespace SqlServerMcpServer.Tests
             
             // Verify format property
             var root = jsonDocument.RootElement;
-            Assert.True(root.TryGetProperty("format", out var format));
+            Assert.True(root.TryGetProperty("data", out var data));
+            Assert.True(data.TryGetProperty("format", out var format));
             Assert.Equal("table", format.GetString());
         }
 
@@ -266,6 +283,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, format: "invalid");
 
             // Assert
@@ -284,6 +302,58 @@ namespace SqlServerMcpServer.Tests
         }
 
         [Fact]
+        public async Task ReadQueryAsync_WithDelete_NoConfirmation_ReturnsConfirmationRequired()
+        {
+            // Arrange
+            var query = "DELETE FROM TestTable";
+
+            var result = await QueryExecution.ReadQueryAsync(query, confirm_unsafe_operation: false);
+
+            Assert.NotNull(result);
+            Assert.True(result.Length > 0);
+
+            var jsonDocument = System.Text.Json.JsonDocument.Parse(result);
+            var root = jsonDocument.RootElement;
+
+            Assert.True(root.TryGetProperty("security_mode", out var securityMode));
+            Assert.Equal("DML_WITH_CONFIRMATION", securityMode.GetString());
+
+            Assert.True(root.TryGetProperty("error", out var error));
+            Assert.True(error.TryGetProperty("details", out var details));
+            Assert.True(details.TryGetProperty("blocked_operation", out var blockedOperation));
+            Assert.Equal("DELETE", blockedOperation.GetString());
+            Assert.True(details.TryGetProperty("requires_confirmation", out var requiresConfirmation));
+            Assert.True(requiresConfirmation.GetBoolean());
+            Assert.True(details.TryGetProperty("confirmation_message", out _));
+        }
+
+        [Fact]
+        public async Task ReadQueryAsync_WithTruncate_NoConfirmation_ReturnsConfirmationRequired()
+        {
+            // Arrange
+            var query = "TRUNCATE TABLE TestTable";
+
+            var result = await QueryExecution.ReadQueryAsync(query, confirm_unsafe_operation: false);
+
+            Assert.NotNull(result);
+            Assert.True(result.Length > 0);
+
+            var jsonDocument = System.Text.Json.JsonDocument.Parse(result);
+            var root = jsonDocument.RootElement;
+
+            Assert.True(root.TryGetProperty("security_mode", out var securityMode));
+            Assert.Equal("DML_WITH_CONFIRMATION", securityMode.GetString());
+
+            Assert.True(root.TryGetProperty("error", out var error));
+            Assert.True(error.TryGetProperty("details", out var details));
+            Assert.True(details.TryGetProperty("blocked_operation", out var blockedOperation));
+            Assert.Equal("TRUNCATE", blockedOperation.GetString());
+            Assert.True(details.TryGetProperty("requires_confirmation", out var requiresConfirmation));
+            Assert.True(requiresConfirmation.GetBoolean());
+            Assert.True(details.TryGetProperty("confirmation_message", out _));
+        }
+
+        [Fact]
         public async Task ReadQueryAsync_WithParameters_ReturnsValidJson()
         {
             // Arrange
@@ -294,6 +364,7 @@ namespace SqlServerMcpServer.Tests
             };
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, parameters: parameters);
 
             // Assert
@@ -312,6 +383,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, timeout: 60);
 
             // Assert
@@ -330,6 +402,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, max_rows: 500);
 
             // Assert
@@ -348,6 +421,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, format: "csv", delimiter: ";");
 
             // Assert
@@ -366,6 +440,7 @@ namespace SqlServerMcpServer.Tests
             var query = "SELECT 1 AS TestColumn";
 
             // Act
+            if (!DatabaseAvailable) return;
             var result = await QueryExecution.ReadQueryAsync(query, format: "csv", delimiter: "tab");
 
             // Assert

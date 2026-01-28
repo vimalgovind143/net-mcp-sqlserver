@@ -7,10 +7,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class DiagnosticsTests
     {
+        private static readonly bool ServerStateAvailable = TestDatabaseHelper.HasViewServerState;
+
         [Fact]
         public async Task GetDatabaseSize_WithTableBreakdown_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetDatabaseSize(includeTableBreakdown: true, topN: 10);
 
             // Assert
@@ -34,6 +37,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabaseSize_WithoutTableBreakdown_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetDatabaseSize(includeTableBreakdown: false, topN: 0);
 
             // Assert
@@ -53,6 +57,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabaseSize_WithTopN_LimitsResults()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetDatabaseSize(includeTableBreakdown: true, topN: 5);
 
             // Assert
@@ -69,6 +74,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetBackupHistory_ForCurrentDatabase_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetBackupHistory(databaseName: null, topN: 20);
 
             // Assert
@@ -90,6 +96,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetBackupHistory_WithDatabaseName_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetBackupHistory(databaseName: "master", topN: 10);
 
             // Assert
@@ -111,6 +118,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetBackupHistory_ValidatesBackupTypeFormat()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetBackupHistory(databaseName: null, topN: 5);
 
             // Assert
@@ -137,6 +145,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetErrorLog_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetErrorLog(topN: 50);
 
             // Assert
@@ -161,6 +170,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetErrorLog_WithTopN_LimitsResults()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetErrorLog(topN: 10);
 
             // Assert
@@ -176,6 +186,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetErrorLog_ValidatesEventStructure()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetErrorLog(topN: 100);
 
             // Assert
@@ -199,6 +210,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetDatabaseSize_IncludesServerInfo()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetDatabaseSize();
 
             // Assert
@@ -215,6 +227,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetBackupHistory_IncludesServerInfo()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetBackupHistory();
 
             // Assert
@@ -231,6 +244,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetErrorLog_IncludesServerInfo()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await Diagnostics.GetErrorLog();
 
             // Assert

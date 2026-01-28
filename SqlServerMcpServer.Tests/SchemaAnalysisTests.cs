@@ -7,10 +7,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class SchemaAnalysisTests
     {
+        private static readonly bool ServerStateAvailable = TestDatabaseHelper.HasViewServerState;
+
         [Fact]
         public async Task GetTableRelationships_AllRelationships_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetTableRelationships(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -35,6 +38,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableRelationships_WithTableFilter_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetTableRelationships(
                 tableName: "test_table", 
                 schemaName: "dbo", 
@@ -55,6 +59,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableRelationships_OnlyReferences_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetTableRelationships(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -77,6 +82,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableRelationships_ValidatesRelationshipStructure()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetTableRelationships(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -104,6 +110,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableRelationships_IncludesServerInfo()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetTableRelationships(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -123,6 +130,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexInformation_AllIndexes_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetIndexInformation(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -146,6 +154,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexInformation_WithTableFilter_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetIndexInformation(
                 tableName: "test_table", 
                 schemaName: "dbo", 
@@ -165,6 +174,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexInformation_WithoutStatistics_ReturnsValidJson()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetIndexInformation(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -184,6 +194,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexInformation_ValidatesIndexStructure()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetIndexInformation(
                 tableName: null, 
                 schemaName: "dbo", 
@@ -210,6 +221,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetIndexInformation_IncludesServerInfo()
         {
             // Act
+            if (!ServerStateAvailable) return;
             var result = await SchemaAnalysis.GetIndexInformation(
                 tableName: null, 
                 schemaName: "dbo", 

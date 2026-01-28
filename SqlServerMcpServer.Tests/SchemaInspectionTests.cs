@@ -7,10 +7,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class SchemaInspectionTests
     {
+        private static readonly bool DatabaseAvailable = TestDatabaseHelper.IsDatabaseAvailable;
+
         [Fact]
         public async Task GetTablesAsync_WithDefaultParameters_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync();
 
             // Assert
@@ -26,6 +29,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithSchemaFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(schemaFilter: "dbo");
 
             // Assert
@@ -41,6 +45,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithNameFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(nameFilter: "sys");
 
             // Assert
@@ -56,6 +61,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithMinRowCount_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(minRowCount: 0);
 
             // Assert
@@ -71,6 +77,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithSortByName_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(sortBy: "NAME");
 
             // Assert
@@ -86,6 +93,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithSortBySize_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(sortBy: "SIZE");
 
             // Assert
@@ -101,6 +109,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithSortByRows_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(sortBy: "ROWS");
 
             // Assert
@@ -116,6 +125,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithDescendingSort_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(sortBy: "NAME", sortOrder: "DESC");
 
             // Assert
@@ -131,6 +141,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithInvalidSortBy_DefaultsToName()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(sortBy: "INVALID");
 
             // Assert
@@ -146,6 +157,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTablesAsync_WithInvalidSortOrder_DefaultsToAsc()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTablesAsync(sortOrder: "INVALID");
 
             // Assert
@@ -161,6 +173,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableSchemaAsync_WithValidTable_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTableSchemaAsync("sysobjects");
 
             // Assert
@@ -176,6 +189,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableSchemaAsync_WithCustomSchema_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTableSchemaAsync("sysobjects", "sys");
 
             // Assert
@@ -191,6 +205,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetTableSchemaAsync_WithStatistics_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetTableSchemaAsync("sysobjects", includeStatistics: true);
 
             // Assert
@@ -206,6 +221,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetStoredProceduresAsync_WithDefaultParameters_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetStoredProceduresAsync();
 
             // Assert
@@ -221,6 +237,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetStoredProceduresAsync_WithNameFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetStoredProceduresAsync(nameFilter: "sp_");
 
             // Assert
@@ -236,6 +253,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetStoredProcedureDetailsAsync_WithValidProcedure_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetStoredProcedureDetailsAsync("sp_helptext");
 
             // Assert
@@ -251,6 +269,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetStoredProcedureDetailsAsync_WithCustomSchema_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetStoredProcedureDetailsAsync("sp_helptext", "sys");
 
             // Assert
@@ -266,6 +285,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetObjectDefinitionAsync_WithAutoDetect_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetObjectDefinitionAsync("sysobjects", objectType: "AUTO");
 
             // Assert
@@ -281,6 +301,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetObjectDefinitionAsync_WithProcedureType_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetObjectDefinitionAsync("sp_helptext", objectType: "PROCEDURE");
 
             // Assert
@@ -296,6 +317,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetObjectDefinitionAsync_WithFunctionType_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetObjectDefinitionAsync("OBJECT_NAME", objectType: "FUNCTION");
 
             // Assert
@@ -311,6 +333,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetObjectDefinitionAsync_WithViewType_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetObjectDefinitionAsync("sys.views", objectType: "VIEW");
 
             // Assert
@@ -326,6 +349,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetObjectDefinitionAsync_WithNonExistentObject_ReturnsErrorJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await SchemaInspection.GetObjectDefinitionAsync("NonExistentObject", objectType: "AUTO");
 
             // Assert

@@ -451,28 +451,48 @@ namespace SqlServerMcpServer.Utilities
         /// </summary>
         /// <param name="blockedOperation">The blocked operation type</param>
         /// <param name="query">The blocked query</param>
+        /// <param name="requiresConfirmation">Whether the operation requires user confirmation</param>
         /// <returns>ErrorContext with security guidance</returns>
-        public static ErrorContext CreateBlockedOperationContext(string blockedOperation, string query)
+        public static ErrorContext CreateBlockedOperationContext(string blockedOperation, string query, bool requiresConfirmation = false)
         {
+            var isDangerousDml = blockedOperation == "DELETE" || blockedOperation == "TRUNCATE";
+            
             var context = new ErrorContext(
                 ErrorCode.BlockedOperation,
-                $"Operation '{blockedOperation}' is not allowed in READ-ONLY mode",
+                isDangerousDml && requiresConfirmation 
+                    ? $"Operation '{blockedOperation}' requires user confirmation to proceed"
+                    : $"Operation '{blockedOperation}' is not allowed in READ-ONLY mode",
                 "QueryValidation"
             );
 
             context.Query = query;
             context.Details["blocked_operation"] = blockedOperation;
-            context.Details["security_mode"] = "READ_ONLY_ENFORCED";
+            context.Details["security_mode"] = requiresConfirmation ? "DML_WITH_CONFIRMATION" : "READ_ONLY_ENFORCED";
+            context.Details["requires_confirmation"] = requiresConfirmation;
 
-            context.TroubleshootingSteps.Add("This MCP server operates in READ-ONLY mode");
-            context.TroubleshootingSteps.Add("Only SELECT statements are permitted for data retrieval");
-            context.TroubleshootingSteps.Add("Database listing, schema inspection, and switching are allowed operations");
-            context.TroubleshootingSteps.Add("DDL (CREATE, ALTER, DROP) and DML (INSERT, UPDATE, DELETE) operations are blocked");
+            if (requiresConfirmation)
+            {
+                context.Details["confirmation_message"] = $"Set confirm_unsafe_operation=true to execute {blockedOperation} queries";
+                
+                context.TroubleshootingSteps.Add($"This is a {blockedOperation} operation that requires explicit confirmation");
+                context.TroubleshootingSteps.Add("Set confirm_unsafe_operation=true parameter to proceed with the operation");
+                context.TroubleshootingSteps.Add("Ensure you have a backup before executing destructive operations");
+                context.SuggestedFixes.Add($"Add confirm_unsafe_operation=true to your request");
+                context.SuggestedFixes.Add("Verify the query targets the correct table(s)");
+                context.SuggestedFixes.Add("Consider testing with a development database first");
+            }
+            else
+            {
+                context.TroubleshootingSteps.Add("This MCP server operates in READ-ONLY mode");
+                context.TroubleshootingSteps.Add("Only SELECT statements are permitted for data retrieval");
+                context.TroubleshootingSteps.Add("Database listing, schema inspection, and switching are allowed operations");
+                context.TroubleshootingSteps.Add("DDL (CREATE, ALTER, DROP) and most DML operations are blocked");
 
-            context.SuggestedFixes.Add($"Remove or replace the '{blockedOperation}' operation");
-            context.SuggestedFixes.Add("Use SELECT statements to query data");
-            context.SuggestedFixes.Add("Use GetDatabases to list available databases");
-            context.SuggestedFixes.Add("Use GetTables to inspect schema information");
+                context.SuggestedFixes.Add($"Remove or replace the '{blockedOperation}' operation");
+                context.SuggestedFixes.Add("Use SELECT statements to query data");
+                context.SuggestedFixes.Add("Use GetDatabases to list available databases");
+                context.SuggestedFixes.Add("Use GetTables to inspect schema information");
+            }
 
             context.DocumentationLinks.Add("README.md - Tool Reference");
             context.DocumentationLinks.Add("Copilot Instructions - Security Guidelines");

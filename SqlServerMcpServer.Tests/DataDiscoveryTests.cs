@@ -7,10 +7,13 @@ namespace SqlServerMcpServer.Tests
 {
     public class DataDiscoveryTests
     {
+        private static readonly bool DatabaseAvailable = TestDatabaseHelper.IsDatabaseAvailable;
+
         [Fact]
         public async Task SearchTableData_AllTables_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.SearchTableData(
                 searchPattern: "%test%", 
                 tableName: null, 
@@ -38,6 +41,7 @@ namespace SqlServerMcpServer.Tests
         public async Task SearchTableData_WithTableFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.SearchTableData(
                 searchPattern: "%test%", 
                 tableName: "specific_table", 
@@ -60,6 +64,7 @@ namespace SqlServerMcpServer.Tests
         public async Task SearchTableData_WithColumnFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.SearchTableData(
                 searchPattern: "%test%", 
                 tableName: null, 
@@ -81,6 +86,7 @@ namespace SqlServerMcpServer.Tests
         public async Task SearchTableData_WithMaxRows_LimitsResults()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.SearchTableData(
                 searchPattern: "%test%", 
                 tableName: null, 
@@ -103,6 +109,7 @@ namespace SqlServerMcpServer.Tests
         public async Task SearchTableData_ValidatesStructure()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.SearchTableData(
                 searchPattern: "%test%", 
                 tableName: null, 
@@ -132,6 +139,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetColumnStatistics_SingleColumn_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.GetColumnStatistics(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -154,6 +162,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetColumnStatistics_AllColumns_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.GetColumnStatistics(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -175,6 +184,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetColumnStatistics_WithHistogram_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.GetColumnStatistics(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -196,6 +206,7 @@ namespace SqlServerMcpServer.Tests
         public async Task GetColumnStatistics_ValidatesStructure()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.GetColumnStatistics(
                 tableName: "sys.tables", 
                 schemaName: "sys", 
@@ -222,6 +233,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindColumnsByDataType_SpecificType_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindColumnsByDataType(
                 dataType: "int", 
                 schemaName: null, 
@@ -249,6 +261,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindColumnsByDataType_WithSchemaFilter_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindColumnsByDataType(
                 dataType: "varchar", 
                 schemaName: "dbo", 
@@ -272,6 +285,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindColumnsByDataType_OnlyNullable_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindColumnsByDataType(
                 dataType: "int", 
                 schemaName: null, 
@@ -297,6 +311,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindColumnsByDataType_ValidatesStructure()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindColumnsByDataType(
                 dataType: "int", 
                 schemaName: null, 
@@ -328,6 +343,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindTablesWithColumn_ExactMatch_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindTablesWithColumn(
                 columnName: "name", 
                 schemaName: null, 
@@ -354,6 +370,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindTablesWithColumn_WildcardSearch_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindTablesWithColumn(
                 columnName: "id", 
                 schemaName: null, 
@@ -376,6 +393,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindTablesWithColumn_IncludeSystemTables_ReturnsValidJson()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindTablesWithColumn(
                 columnName: "name", 
                 schemaName: null, 
@@ -398,6 +416,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindTablesWithColumn_ValidatesStructure()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindTablesWithColumn(
                 columnName: "name", 
                 schemaName: null, 
@@ -427,6 +446,7 @@ namespace SqlServerMcpServer.Tests
         public async Task FindTablesWithColumn_IncludesServerInfo()
         {
             // Act
+            if (!DatabaseAvailable) return;
             var result = await DataDiscovery.FindTablesWithColumn(
                 columnName: "name", 
                 schemaName: null, 

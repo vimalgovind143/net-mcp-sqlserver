@@ -16,6 +16,12 @@ namespace SqlServerMcpServer.Utilities
         /// <returns>Standard error response object</returns>
         public static object CreateErrorContextResponse(ErrorContext context, long executionTimeMs = 0)
         {
+            var securityMode = "READ_ONLY_ENFORCED";
+            if (context.Details != null && context.Details.TryGetValue("security_mode", out var modeValue))
+            {
+                securityMode = modeValue?.ToString() ?? securityMode;
+            }
+
             return new
             {
                 server_name = SqlConnectionManager.ServerName,
@@ -24,7 +30,7 @@ namespace SqlServerMcpServer.Utilities
                 operation = context.Operation,
                 timestamp = DateTimeOffset.UtcNow,
                 execution_time_ms = executionTimeMs,
-                security_mode = "READ_ONLY_ENFORCED",
+                security_mode = securityMode,
                 error = new
                 {
                     code = context.Code.GetDescription(),
@@ -56,7 +62,7 @@ namespace SqlServerMcpServer.Utilities
         /// <returns>Standard response object</returns>
         public static object CreateStandardResponse(string operation, object data, long executionTimeMs,
             List<string> warnings = null, List<string> recommendations = null,
-            Dictionary<string, object> metadata = null)
+            Dictionary<string, object> metadata = null, string securityMode = "READ_ONLY")
         {
             return new
             {
@@ -66,7 +72,7 @@ namespace SqlServerMcpServer.Utilities
                 operation = operation,
                 timestamp = DateTimeOffset.UtcNow,
                 execution_time_ms = executionTimeMs,
-                security_mode = "READ_ONLY",
+                security_mode = securityMode,
                 data = data,
                 metadata = metadata ?? new Dictionary<string, object>(),
                 warnings = warnings ?? new List<string>(),
@@ -192,6 +198,12 @@ namespace SqlServerMcpServer.Utilities
         /// <returns>Standard blocked response object</returns>
         public static object CreateBlockedContextResponse(ErrorContext context, long executionTimeMs = 0)
         {
+            var securityMode = "READ_ONLY_ENFORCED";
+            if (context.Details != null && context.Details.TryGetValue("security_mode", out var modeValue))
+            {
+                securityMode = modeValue?.ToString() ?? securityMode;
+            }
+
             return new
             {
                 server_name = SqlConnectionManager.ServerName,
@@ -200,7 +212,7 @@ namespace SqlServerMcpServer.Utilities
                 operation = context.Operation,
                 timestamp = DateTimeOffset.UtcNow,
                 execution_time_ms = executionTimeMs,
-                security_mode = "READ_ONLY_ENFORCED",
+                security_mode = securityMode,
                 error = new
                 {
                     code = context.Code.GetDescription(),
