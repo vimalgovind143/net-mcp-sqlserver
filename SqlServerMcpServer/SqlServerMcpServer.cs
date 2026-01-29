@@ -284,6 +284,22 @@ namespace SqlServerMcpServer
             return await PerformanceAnalysis.GetIndexFragmentation(tableName, schemaName, minFragmentation, includeOnlineStatus);
         }
 
+        /// <summary>
+        /// Get comprehensive database-wide index fragmentation report with summary statistics
+        /// </summary>
+        /// <param name="minFragmentation">Minimum fragmentation percentage to include (default: 5.0)</param>
+        /// <param name="minSizeMB">Minimum index size in MB to include (default: 1)</param>
+        /// <param name="includeSystemTables">Include system table indexes (default: false)</param>
+        /// <returns>Comprehensive index fragmentation report as JSON string</returns>
+        [McpServerTool, Description("Get comprehensive database-wide index fragmentation report with summary statistics and maintenance recommendations")]
+        public static async Task<string> GetDatabaseIndexFragmentationReportAsync(
+            [Description("Minimum fragmentation percentage to include (default: 5.0)")] decimal minFragmentation = 5.0m,
+            [Description("Minimum index size in MB to include (default: 1)")] decimal minSizeMB = 1.0m,
+            [Description("Include system table indexes (default: false)")] bool includeSystemTables = false)
+        {
+            return await PerformanceAnalysis.GetDatabaseIndexFragmentationReport(minFragmentation, minSizeMB, includeSystemTables);
+        }
+
         // ==================== Data Discovery Operations ====================
 
         [McpServerTool, Description("Search for data across tables with pattern matching")]
