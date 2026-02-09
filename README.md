@@ -4,10 +4,12 @@ A Model Context Protocol (MCP) server that provides tools for interacting with M
 
 ## Features
 
-- **🔒 Read-Only Security**: Enforced SELECT-only operations to prevent accidental data modification
+- **🔒 Secure DML Support**: SELECT queries plus controlled INSERT, UPDATE, DELETE, and TRUNCATE operations
+- **Confirmation Protection**: DELETE and TRUNCATE operations require explicit confirmation
+- **DDL Protection**: CREATE, ALTER, DROP, and other schema-changing operations are blocked
 - **Dynamic Database Switching**: Switch between databases on the same server without restarting
 - **Database Listing**: View all available databases with current database highlighted
-- **Execute SQL Queries**: Run read-only SQL queries against the current database
+- **Execute SQL Queries**: Run SELECT, INSERT, UPDATE queries; DELETE/TRUNCATE with confirmation
 - **List Tables**: Get all tables in the current database with row counts
 - **Get Table Schema**: Retrieve column information for specific tables
 - **Connection Info**: Display current database connection status
@@ -15,35 +17,70 @@ A Model Context Protocol (MCP) server that provides tools for interacting with M
 - **Object Definition**: Unified endpoint to get detailed information for any database object (procedures, functions, views) including definitions, parameters/columns, and dependencies
 - **Health Check**: Verify connectivity and view server properties
 - **Structured Logging**: JSON logs to stderr with correlation IDs and timings
- - **Serilog Integration**: Structured logging via Serilog with JSON formatting
- - **Row Limit Enforcement**: Max 100 rows returned per query
+- **Serilog Integration**: Structured logging via Serilog with JSON formatting
+- **Row Limit Enforcement**: Max 100 rows returned per query
 
 ## 🔒 Security Features
 
-This MCP server is designed with **read-only security** to prevent accidental data modification:
+This MCP server provides secure data access with controlled DML operations:
 
-### **Blocked Operations:**
-- ❌ INSERT, UPDATE, DELETE statements
-- ❌ DROP, CREATE, ALTER statements  
-- ❌ TRUNCATE, MERGE operations
+### **Query Classification**
+Queries are classified into categories with different security levels:
+
+| Category | Operations | Status |
+|----------|------------|--------|
+| **Read-Only** | SELECT, CTEs | ✅ Always Allowed |
+| **Data Modification** | INSERT, UPDATE | ✅ Allowed with warnings |
+| **Destructive** | DELETE, TRUNCATE | ⚠️ Requires Confirmation |
+| **Schema Changes** | CREATE, ALTER, DROP | ❌ Always Blocked |
+
+### **Blocked Operations (Always Prevented):**
+- ❌ DROP, CREATE, ALTER statements (DDL)
 - ❌ EXEC/EXECUTE stored procedures
+- ❌ MERGE operations
 - ❌ GRANT, REVOKE, DENY permissions
 - ❌ BULK operations
 - ❌ SELECT INTO (object creation)
 - ❌ Multiple statements in a single request
-- ❌ Any non-SELECT statements
- - ❌ USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, sp_configure
+- ❌ USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, sp_configure
 
 ### **Allowed Operations:**
 - ✅ SELECT queries for data retrieval
+- ✅ INSERT statements (data creation)
+- ✅ UPDATE statements (data modification)
+- ✅ DELETE statements (with `confirmUnsafeOperation=true`)
+- ✅ TRUNCATE statements (with `confirmUnsafeOperation=true`)
 - ✅ Database listing and switching
 - ✅ Table schema inspection
 - ✅ Connection status queries
 
+### **Confirmation Mechanism:**
+For DELETE and TRUNCATE operations, you must explicitly confirm:
+
+```json
+// DELETE example - will FAIL without confirmation
+{
+  "query": "DELETE FROM Orders WHERE Status = 'Cancelled'",
+  "confirmUnsafeOperation": false  // ❌ Blocked - confirmation required
+}
+
+// DELETE example - will SUCCEED with confirmation
+{
+  "query": "DELETE FROM Orders WHERE Status = 'Cancelled'",
+  "confirmUnsafeOperation": true   // ✅ Allowed with confirmation
+}
+```
+
 ### **Error Messages:**
 When a blocked operation is attempted, the server provides clear, specific error messages:
+
 ```
-❌ UPDATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.
+❌ CREATE operations are not allowed. This MCP server blocks DDL operations.
+```
+
+For DELETE/TRUNCATE without confirmation:
+```
+⚠️ DELETE operations require user confirmation. Set confirmUnsafeOperation=true to proceed.
 ```
 
 ### **Additional Safety Features:**
@@ -51,10 +88,11 @@ When a blocked operation is attempted, the server provides clear, specific error
 - Input validation and sanitization
 - Detailed error reporting with helpful guidance
 - Security mode indicators in all responses
+- Warnings displayed for DML operations reminding users to have backups
 
 ## Dynamic Database Management
 
-The MCP server now supports dynamic database switching, allowing you to:
+The MCP server supports dynamic database switching, allowing you to:
 
 1. **List all databases** - See every database on the SQL Server instance
 2. **Switch databases** - Change the active database without restarting the server
@@ -138,7 +176,7 @@ If not set, the timeout defaults to `30` seconds.
 
 Alternatively, you can configure via `appsettings.json` placed alongside the executable or under the project directory:
 
-```
+```json
 {
   "SqlServer": {
     "ConnectionString": "Server=localhost;Database=master;Trusted_Connection=true;TrustServerCertificate=true;",
@@ -177,7 +215,7 @@ Get the current database connection info with structured request logging.
 
 **Behavior:**
 - Emits Serilog start/end events with a correlation ID and elapsed time
-- Includes read-only security indicators in the payload
+- Includes security mode indicators in the payload
 
 **Example Usage:**
 ```
@@ -210,34 +248,57 @@ List all databases on this SQL Server instance
 ```
 
 ### 4. ExecuteQuery
-Execute a SQL query on the current database.
+Execute a SQL query on the current database with pagination and metadata. Supports SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation.
 
 **Parameters:**
 - `query` (string): The SQL query to execute
- - `maxRows` (int, optional): Requested rows (defaults to 100; clamped to 100)
+- `maxRows` (int, optional): Maximum rows to return (default 100, max 1000)
+- `offset` (int, optional): Offset for pagination (default: 0)
+- `pageSize` (int, optional): Page size for pagination (default: 100, max: 1000)
+- `includeStatistics` (bool, optional): Include query execution statistics (default: false)
+- `confirmUnsafeOperation` (bool, optional): Confirm execution of DELETE/TRUNCATE operations (default: false)
 
 **Example Usage:**
 ```
 Please execute "SELECT TOP 10 * FROM Users ORDER BY CreatedDate DESC" and show me the results
 ```
 
+**DML Examples:**
+```
+-- INSERT (allowed)
+ExecuteQuery query="INSERT INTO Users (Name, Email) VALUES ('John', 'john@example.com')"
+
+-- UPDATE (allowed)
+ExecuteQuery query="UPDATE Users SET Status = 'Active' WHERE Id = 123"
+
+-- DELETE (requires confirmation)
+ExecuteQuery query="DELETE FROM Users WHERE Status = 'Inactive'" confirmUnsafeOperation=true
+
+-- TRUNCATE (requires confirmation)
+ExecuteQuery query="TRUNCATE TABLE TempData" confirmUnsafeOperation=true
+```
+
 Notes:
 - The server enforces a hard cap of 100 rows per query. Any higher request is clamped to 100.
 - The server safely injects `TOP <N>` after the first `SELECT` when absent, and caps an existing `TOP` if it exceeds 100.
+- DELETE and TRUNCATE operations require `confirmUnsafeOperation=true` parameter.
+- Warnings are displayed for DML operations to remind users to have backups.
 
 ### 5. ReadQuery (SRS)
-Execute a read-only T-SQL query with result formatting, per-call timeout, and parameter binding. Matches the SRS `read_query` specification.
+Execute a SQL query with formatting and parameters (SRS: read_query). Supports SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation.
 
 **Parameters:**
-- `query` (string, required): T-SQL `SELECT` statement
+- `query` (string, required): T-SQL query
 - `timeout` (int, optional): Per-call timeout in seconds; default 30; clamped 1–300
-- `max_rows` (int, optional): Requested max rows; default 1000; clamped 1–10,000
+- `max_rows` (int, optional): Maximum rows to return (default 1000, range 1–10,000)
 - `format` (string, optional): `json` | `csv` | `table` (HTML); default `json`
 - `parameters` (object, optional): Named parameters to bind (e.g., `{ id: 42 }`); keys may include or omit `@`
 - `delimiter` (string, optional): CSV delimiter; default `,`; use `tab` or `\t` for tab
+- `confirm_unsafe_operation` (bool, optional): Confirm execution of DELETE/TRUNCATE operations (default: false)
 
 **Behavior:**
-- Enforces read-only validation (SELECT-only, blocks DDL/DML/EXEC and multiple statements)
+- Enforces query validation (blocks DDL and dangerous operations)
+- DELETE/TRUNCATE require confirmation flag
 - Applies per-call timeout if provided; otherwise uses server default
 - Injects or caps `TOP <N>` to respect `max_rows`
 - Returns:
@@ -248,10 +309,17 @@ Execute a read-only T-SQL query with result formatting, per-call timeout, and pa
 
 **Example Usage:**
 ```
+-- SELECT with parameters
 ReadQuery query="SELECT * FROM Orders WHERE CustomerID = @id ORDER BY CreatedAt DESC" parameters={"id": 123} max_rows=500 format=csv delimiter="," timeout=60
+
+-- INSERT
+ReadQuery query="INSERT INTO Logs (Message, CreatedAt) VALUES (@msg, GETDATE())" parameters={"msg": "System started"}
+
+-- DELETE with confirmation
+ReadQuery query="DELETE FROM OldLogs WHERE CreatedAt < @date" parameters={"date": "2023-01-01"} confirm_unsafe_operation=true
 ```
 
-### 5. GetTables
+### 6. GetTables
 Get a list of all tables in the current database with row counts.
 
 **Parameters:** None
@@ -261,7 +329,7 @@ Get a list of all tables in the current database with row counts.
 Show me all tables in the current database
 ```
 
-### 6. GetTableSchema
+### 7. GetTableSchema
 Get the schema information for a specific table.
 
 **Parameters:**
@@ -273,7 +341,7 @@ Get the schema information for a specific table.
 Get the schema for the Users table
 ```
 
-### 7. GetStoredProcedures
+### 8. GetStoredProcedures
 Get a list of stored procedures in the current database.
 
 **Parameters:** None
@@ -283,7 +351,7 @@ Get a list of stored procedures in the current database.
 List all stored procedures
 ```
 
-### 8. GetStoredProcedureDetails
+### 9. GetStoredProcedureDetails
 Get detailed information about a specific stored procedure including parameters, definition, and dependencies.
 
 **Parameters:**
@@ -310,7 +378,7 @@ Show me the parameters and definition of dbo.sp_CalculateRevenue
 - `parameters` - Full parameter list with types, precision, scale, output flags
 - `dependencies` - All database objects referenced by the procedure
 
-### 9. GetObjectDefinition
+### 10. GetObjectDefinition
 Get detailed information about any database object (stored procedure, function, or view) in a unified endpoint.
 
 **Parameters:**
@@ -349,7 +417,7 @@ Get information about the function fn_CalculateDiscount in the sales schema
 - `columns` - (For views) Column schema with data types and properties
 - `dependencies` - All database objects referenced by this object
 
-### 10. GetServerHealth
+### 11. GetServerHealth
 Check connectivity and return server properties.
 
 **Parameters:** None
@@ -382,10 +450,14 @@ Server=your_server.database.windows.net;Database=YourDatabase;User Id=your_usern
 ## Security Considerations
 
 - This server executes SQL queries directly against your database
+- **DDL operations are blocked**: CREATE, ALTER, DROP, etc. cannot be executed
+- **DML operations are allowed**: INSERT, UPDATE, DELETE, TRUNCATE can modify data
+- **Destructive operations require confirmation**: DELETE and TRUNCATE need explicit `confirmUnsafeOperation=true`
 - Ensure proper database permissions are configured
 - Use parameterized queries when possible to prevent SQL injection
 - Consider limiting the database user's permissions to only what's necessary
 - Never expose connection strings with passwords in version control
+- **Always have backups before executing DML operations**, especially DELETE and TRUNCATE
 
 ## Error Handling
 
@@ -394,6 +466,8 @@ The server returns descriptive error messages for:
 - Invalid SQL syntax
 - Permission issues
 - Database not found
+- Blocked DDL operations
+- Unconfirmed DELETE/TRUNCATE attempts
 
 ## Development
 
@@ -431,16 +505,17 @@ To test the server locally:
 ## License
 
 This project is provided as-is for educational and development purposes.
+
 ## Logging
 
 This project uses Serilog for structured logging.
 
-- Default sink: JSON logs written to `stderr` (non-interfering with MCP stdio)
+- Default sink: JSON logs written to file in the `logs` directory
 - Log content: start/end events with `correlation_id`, `operation`, `elapsed_ms`, plus error details
 - Configuration: Serilog reads settings from `appsettings.json` if present
 
 Example `appsettings.json` Serilog block:
-```
+```json
 {
   "Serilog": {
     "MinimumLevel": {
@@ -454,4 +529,4 @@ Example `appsettings.json` Serilog block:
 }
 ```
 
-Logs can be consumed directly from `stderr` or redirected as needed by your host environment.
+Logs can be consumed from the `logs` directory or configured to use additional sinks as needed by your host environment.

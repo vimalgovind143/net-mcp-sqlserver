@@ -242,27 +242,27 @@ namespace SqlServerMcpServer.Security
         {
             return blockedOperation switch
             {
-                "INSERT" => "❌ INSERT operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "UPDATE" => "❌ UPDATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                "INSERT" => "❌ INSERT operations are blocked by legacy validation. Use IsDmlQueryAllowed() for DML support. INSERT is allowed with appropriate validation.",
+                "UPDATE" => "❌ UPDATE operations are blocked by legacy validation. Use IsDmlQueryAllowed() for DML support. UPDATE is allowed with appropriate validation.",
                 "DELETE" => requiresConfirmation 
-                    ? "⚠️ DELETE operations require user confirmation. Set confirm_unsafe_operation=true to proceed."
-                    : "❌ DELETE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
+                    ? "⚠️ DELETE operations require user confirmation. Set confirmUnsafeOperation=true (or confirm_unsafe_operation=true) to proceed."
+                    : "❌ DELETE operations require explicit confirmation. Set confirmUnsafeOperation=true to proceed with caution.",
                 "TRUNCATE" => requiresConfirmation
-                    ? "⚠️ TRUNCATE operations require user confirmation. Set confirm_unsafe_operation=true to proceed."
-                    : "❌ TRUNCATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "DROP" => "❌ DROP operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "CREATE" => "❌ CREATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "ALTER" => "❌ ALTER operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "EXEC" or "EXECUTE" => "❌ EXEC/EXECUTE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "MERGE" => "❌ MERGE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "BULK" => "❌ BULK operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "GRANT" => "❌ GRANT operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "REVOKE" => "❌ REVOKE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "DENY" => "❌ DENY operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "SELECT_INTO" => "❌ SELECT INTO is not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                "MULTIPLE_STATEMENTS" => "❌ Multiple statements are not allowed. Submit a single SELECT statement.",
-                "NON_SELECT_STATEMENT" => "❌ Only SELECT statements are allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.",
-                _ => $"❌ {blockedOperation} operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing."
+                    ? "⚠️ TRUNCATE operations require user confirmation. Set confirmUnsafeOperation=true (or confirm_unsafe_operation=true) to proceed."
+                    : "❌ TRUNCATE operations require explicit confirmation. Set confirmUnsafeOperation=true to proceed with extreme caution.",
+                "DROP" => "❌ DROP operations are not allowed. DDL (schema modification) operations are permanently blocked for security.",
+                "CREATE" => "❌ CREATE operations are not allowed. DDL (schema modification) operations are permanently blocked for security.",
+                "ALTER" => "❌ ALTER operations are not allowed. DDL (schema modification) operations are permanently blocked for security.",
+                "EXEC" or "EXECUTE" => "❌ EXEC/EXECUTE operations are not allowed. Stored procedure execution is blocked to prevent unauthorized access.",
+                "MERGE" => "❌ MERGE operations are not allowed. MERGE statements are blocked due to their complex data modification capabilities.",
+                "BULK" => "❌ BULK operations are not allowed. Bulk operations are blocked for security and performance reasons.",
+                "GRANT" => "❌ GRANT operations are not allowed. Permission changes are permanently blocked.",
+                "REVOKE" => "❌ REVOKE operations are not allowed. Permission changes are permanently blocked.",
+                "DENY" => "❌ DENY operations are not allowed. Permission changes are permanently blocked.",
+                "SELECT_INTO" => "❌ SELECT INTO is not allowed. Object creation via SELECT INTO is blocked as a DDL operation.",
+                "MULTIPLE_STATEMENTS" => "❌ Multiple statements are not allowed. Submit a single statement per request to prevent injection attacks.",
+                "NON_SELECT_STATEMENT" => "❌ Only SELECT, INSERT, UPDATE, DELETE, and TRUNCATE statements are allowed. Other statement types are blocked.",
+                _ => $"❌ {blockedOperation} operations are not allowed. This operation type is blocked for security reasons."
             };
         }
 

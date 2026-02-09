@@ -2,11 +2,13 @@
 
 ## Project Overview
 
-This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the official C# SDK. It provides read-only tools for interacting with Microsoft SQL Server databases, designed for integration with AI assistants like Claude Desktop.
+This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the official C# SDK. It provides tools for interacting with Microsoft SQL Server databases, designed for integration with AI assistants like Claude Desktop.
 
 ### Core Principles
 
-- **READ-ONLY Security**: All operations enforce SELECT-only access - no data modifications allowed
+- **Secure DML Support**: SELECT queries plus controlled INSERT, UPDATE, DELETE, and TRUNCATE operations
+- **DDL Protection**: CREATE, ALTER, DROP, and other schema-changing operations are blocked
+- **Confirmation for Destructive Operations**: DELETE and TRUNCATE require explicit confirmation
 - **Structured Responses**: All responses are JSON-formatted with consistent structure
 - **Comprehensive Error Handling**: Rich error context with troubleshooting steps and suggestions
 - **Caching**: Metadata caching with configurable TTLs for performance
@@ -141,31 +143,42 @@ catch
 
 ## Security Guidelines
 
-### Validation Flow (QueryValidator.IsReadOnlyQuery)
+### Query Classification
+
+The `QueryValidator.ClassifyQuery()` method categorizes queries into:
+- **ReadOnly**: SELECT queries and CTEs
+- **Insert**: INSERT operations (allowed)
+- **Update**: UPDATE operations (allowed)
+- **Delete**: DELETE operations (requires confirmation)
+- **Truncate**: TRUNCATE operations (requires confirmation)
+- **Dangerous**: DROP, CREATE, ALTER, EXEC, etc. (always blocked)
+
+### Validation Flow (QueryValidator.IsDmlQueryAllowed)
 
 - Strips block/line comments, normalizes whitespace, uppercases the query.
 - Blocks multiple statements (allows only a single trailing semicolon).
-- Blocks dangerous keywords:
-  - **DDL**: CREATE, ALTER, DROP, TRUNCATE
-  - **DML**: INSERT, UPDATE, DELETE, MERGE
+- **Always Blocked (DDL/Dangerous)**:
+  - **DDL**: CREATE, ALTER, DROP
   - **Execution**: EXEC, EXECUTE, BULK
   - **Permissions**: GRANT, REVOKE, DENY
   - **System/Config**: USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, SP_CONFIGURE
   - **Object Creation**: SELECT INTO
-- Requires queries to start with SELECT or CTEs (`WITH ... SELECT`); otherwise blocked as NON_SELECT_STATEMENT.
+- **Allowed DML**: INSERT, UPDATE (no confirmation needed)
+- **Confirmation Required**: DELETE, TRUNCATE (requires `confirmUnsafeOperation=true`)
 
 ### Allowed Operations
 
-- SELECT queries (with CTEs via WITH) that do not include blocked operations
-- Database listing and switching
-- Schema inspection
-- Table/procedure/view introspection
+- **Read Operations**: SELECT queries (with CTEs via WITH)
+- **Data Modification**: INSERT, UPDATE statements
+- **Destructive Operations**: DELETE, TRUNCATE (with confirmation flag)
+- **Metadata Operations**: Database listing and switching, schema inspection, table/procedure/view introspection
 
 ### Query Warnings (QueryValidator.GenerateQueryWarnings)
 
 - Adds advisory warnings (not blockers) when:
   - No WHERE/TOP clause is present (may return large result set)
   - Manual pagination detected (offset provided without OFFSET/FETCH clause)
+  - DML operations detected (warns users to have backups)
 
 ---
 
@@ -377,13 +390,13 @@ dotnet publish -c Release -o publish
 
 ## Important Notes for AI Agents
 
-1. **Never modify data** - This is a READ-ONLY server. Never suggest INSERT/UPDATE/DELETE operations.
+1. **Understand DML support** - The server allows SELECT, INSERT, UPDATE, DELETE, and TRUNCATE. DELETE and TRUNCATE require `confirmUnsafeOperation=true`. DDL (CREATE, ALTER, DROP) is always blocked.
 
 2. **Always use ResponseFormatter** - All responses must go through `ResponseFormatter.ToJson()`.
 
 3. **Always handle errors** - Every operation must have try-catch with proper error context creation.
 
-4. **Validate before executing** - Use `QueryValidator.IsReadOnlyQuery()` for any user-provided SQL.
+4. **Validate before executing** - Use `QueryValidator.IsDmlQueryAllowed()` for any user-provided SQL to check if the operation is allowed and if confirmation is required.
 
 5. **Use caching appropriately** - Check `CacheService` for reusable patterns.
 

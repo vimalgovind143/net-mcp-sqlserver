@@ -495,8 +495,8 @@ namespace SqlServerMcpServer.Tests
             var message = QueryValidator.GetBlockedOperationMessage(operation);
 
             // Assert
-            Assert.Contains("INSERT operations are not allowed", message);
-            Assert.Contains("READ-ONLY", message);
+            Assert.Contains("INSERT operations are blocked", message);
+            Assert.Contains("legacy validation", message);
         }
 
         [Fact]
@@ -509,8 +509,8 @@ namespace SqlServerMcpServer.Tests
             var message = QueryValidator.GetBlockedOperationMessage(operation, requiresConfirmation: false);
 
             // Assert
-            Assert.Contains("DELETE operations are not allowed", message);
-            Assert.Contains("READ-ONLY", message);
+            Assert.Contains("DELETE operations require explicit confirmation", message);
+            Assert.Contains("confirmUnsafeOperation", message);
         }
 
         [Fact]
@@ -537,8 +537,8 @@ namespace SqlServerMcpServer.Tests
             var message = QueryValidator.GetBlockedOperationMessage(operation, requiresConfirmation: false);
 
             // Assert
-            Assert.Contains("TRUNCATE operations are not allowed", message);
-            Assert.Contains("READ-ONLY", message);
+            Assert.Contains("TRUNCATE operations require explicit confirmation", message);
+            Assert.Contains("extreme caution", message);
         }
 
         [Fact]
@@ -566,7 +566,7 @@ namespace SqlServerMcpServer.Tests
 
             // Assert
             Assert.Contains("UNKNOWN_OPERATION operations are not allowed", message);
-            Assert.Contains("READ-ONLY", message);
+            Assert.Contains("blocked for security reasons", message);
         }
 
         #endregion
