@@ -17,6 +17,7 @@ namespace SqlServerMcpServer.Operations
         /// Execute a SQL query on the current database with pagination and metadata
         /// </summary>
         /// <param name="query">The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)</param>
+        /// <param name="parameters">Named parameters to bind (e.g., { "id": 123, "name": "John" })</param>
         /// <param name="maxRows">Maximum rows to return (default 100, max 1000)</param>
         /// <param name="offset">Offset for pagination (default: 0)</param>
         /// <param name="pageSize">Page size for pagination (default: 100, max: 1000)</param>
@@ -26,6 +27,7 @@ namespace SqlServerMcpServer.Operations
         [McpServerTool, Description("Execute a SQL query on the current database with pagination and metadata (supports SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")]
         public static async Task<string> ExecuteQueryAsync(
             [Description("The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")] string query,
+            [Description("Named parameters to bind (e.g., { id: 123, name: 'John' })")] Dictionary<string, object>? parameters = null,
             [Description("Maximum rows to return (default 100, max 1000)")] int? maxRows = 100,
             [Description("Offset for pagination (default: 0)")] int? offset = 0,
             [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
@@ -36,6 +38,25 @@ namespace SqlServerMcpServer.Operations
             try
             {
                 var corr = LoggingHelper.LogStart("ExecuteQuery", $"query:{query.Substring(0, Math.Min(query.Length, 100))}...");
+
+                // Check rate limits
+                var isDml = QueryValidator.ClassifyQuery(query) != QueryType.ReadOnly;
+                var rateLimitResult = RateLimiter.RecordRequest(corr.ToString(), isDml);
+                if (!rateLimitResult.IsAllowed)
+                {
+                    var context = new ErrorContext(
+                        ErrorCode.RateLimitExceeded,
+                        rateLimitResult.BlockReason ?? "Rate limit exceeded",
+                        "ExecuteQuery"
+                    );
+                    context.SuggestedFixes.Add($"Retry after {rateLimitResult.RetryAfter?.TotalSeconds ?? 60} seconds");
+                    context.SuggestedFixes.Add("Reduce query frequency to stay within limits");
+                    context.Details["retry_after_seconds"] = rateLimitResult.RetryAfter?.TotalSeconds ?? 60;
+                    context.Details["current_requests"] = rateLimitResult.CurrentRequests;
+                    context.Details["remaining_requests"] = rateLimitResult.RemainingRequests;
+                    var blockedPayload = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                    return ResponseFormatter.ToJson(blockedPayload);
+                }
 
                 // Validate and normalize parameters
                 var effectivePageSize = Math.Min(pageSize ?? 100, 1000);
@@ -54,8 +75,27 @@ namespace SqlServerMcpServer.Operations
                     return ResponseFormatter.ToJson(blockedPayload);
                 }
 
+                // Check query complexity to prevent DoS
+                var complexityScore = QueryComplexityAnalyzer.Analyze(query);
+                if (!complexityScore.IsAllowed)
+                {
+                    var context = new ErrorContext(
+                        ErrorCode.QueryTooComplex,
+                        complexityScore.BlockReason ?? "Query is too complex",
+                        "ExecuteQuery"
+                    );
+                    context.SuggestedFixes.Add("Simplify the query by reducing JOINs, subqueries, or UNIONs");
+                    context.SuggestedFixes.Add("Break complex queries into smaller, simpler queries");
+                    context.SuggestedFixes.Add($"Current complexity score: {complexityScore.TotalScore}, Maximum allowed: {QueryComplexityAnalyzer.GetMaxComplexityScore()}");
+                    var blockedPayload = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                    return ResponseFormatter.ToJson(blockedPayload);
+                }
+
                 // Generate query warnings
                 var warnings = QueryValidator.GenerateQueryWarnings(query, effectiveOffset);
+
+                // Add complexity warnings
+                warnings.AddRange(complexityScore.Warnings);
 
                 using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync();
 
@@ -88,7 +128,32 @@ namespace SqlServerMcpServer.Operations
                     {
                         CommandTimeout = SqlConnectionManager.CommandTimeout
                     };
+                    
+                    // Bind parameters if provided (prevents SQL injection)
+                    if (parameters is not null)
+                    {
+                        foreach (var kvp in parameters)
+                        {
+                            var name = kvp.Key?.Trim();
+                            if (string.IsNullOrEmpty(name)) continue;
+                            if (!name.StartsWith("@")) name = "@" + name;
+                            var value = kvp.Value ?? DBNull.Value;
+                            dmlCommand.Parameters.AddWithValue(name, value);
+                        }
+                    }
+                    
                     rowCount = await dmlCommand.ExecuteNonQueryAsync();
+
+                    // Audit log the DML operation
+                    AuditService.LogDmlOperation(
+                        operation: queryType.ToString().ToUpper(),
+                        query: query,
+                        rowsAffected: rowCount,
+                        hadConfirmation: confirmUnsafeOperation,
+                        parameters: parameters,
+                        executionTimeMs: sw.ElapsedMilliseconds,
+                        correlationId: corr.ToString()
+                    );
 
                     queryMetadata["rows_affected"] = rowCount;
                     queryMetadata["columns_returned"] = 0;
@@ -127,6 +192,20 @@ namespace SqlServerMcpServer.Operations
                     {
                         CommandTimeout = SqlConnectionManager.CommandTimeout
                     };
+                    
+                    // Bind parameters if provided (prevents SQL injection)
+                    if (parameters is not null)
+                    {
+                        foreach (var kvp in parameters)
+                        {
+                            var name = kvp.Key?.Trim();
+                            if (string.IsNullOrEmpty(name)) continue;
+                            if (!name.StartsWith("@")) name = "@" + name;
+                            var value = kvp.Value ?? DBNull.Value;
+                            selectCommand.Parameters.AddWithValue(name, value);
+                        }
+                    }
+                    
                     using var reader = await selectCommand.ExecuteReaderAsync();
 
                     // Get column information
@@ -287,6 +366,24 @@ namespace SqlServerMcpServer.Operations
             {
                 var corr = LoggingHelper.LogStart("ReadQuery", query);
 
+                // Check rate limits
+                var isDml = QueryValidator.ClassifyQuery(query) != QueryType.ReadOnly;
+                var rateLimitResult = RateLimiter.RecordRequest(corr.ToString(), isDml);
+                if (!rateLimitResult.IsAllowed)
+                {
+                    var context = new ErrorContext(
+                        ErrorCode.RateLimitExceeded,
+                        rateLimitResult.BlockReason ?? "Rate limit exceeded",
+                        "ReadQuery"
+                    );
+                    context.SuggestedFixes.Add($"Retry after {rateLimitResult.RetryAfter?.TotalSeconds ?? 60} seconds");
+                    context.SuggestedFixes.Add("Reduce query frequency to stay within limits");
+                    context.Details["retry_after_seconds"] = rateLimitResult.RetryAfter?.TotalSeconds ?? 60;
+                    context.Details["current_requests"] = rateLimitResult.CurrentRequests;
+                    context.Details["remaining_requests"] = rateLimitResult.RemainingRequests;
+                    return ResponseFormatter.ToJson(ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds));
+                }
+
                 // Validate query using new DML-aware validation
                 if (!QueryValidator.IsDmlQueryAllowed(query, confirm_unsafe_operation, out string? blockedOperation))
                 {
@@ -294,6 +391,21 @@ namespace SqlServerMcpServer.Operations
                     var context = ErrorHelper.CreateBlockedOperationContext(blockedOperation!, query, requiresConfirmation);
                     return ResponseFormatter.ToJson(
                         ResponseFormatter.CreateBlockedContextResponse(context, sw.ElapsedMilliseconds));
+                }
+
+                // Check query complexity to prevent DoS
+                var complexityScore = QueryComplexityAnalyzer.Analyze(query);
+                if (!complexityScore.IsAllowed)
+                {
+                    var context = new ErrorContext(
+                        ErrorCode.QueryTooComplex,
+                        complexityScore.BlockReason ?? "Query is too complex",
+                        "ReadQuery"
+                    );
+                    context.SuggestedFixes.Add("Simplify the query by reducing JOINs, subqueries, or UNIONs");
+                    context.SuggestedFixes.Add("Break complex queries into smaller, simpler queries");
+                    context.SuggestedFixes.Add($"Current complexity score: {complexityScore.TotalScore}, Maximum allowed: {QueryComplexityAnalyzer.GetMaxComplexityScore()}");
+                    return ResponseFormatter.ToJson(ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds));
                 }
 
                 // Validate and normalize parameters
@@ -365,6 +477,17 @@ namespace SqlServerMcpServer.Operations
                 if (queryType != QueryType.ReadOnly)
                 {
                     var rowsAffected = await command.ExecuteNonQueryAsync();
+
+                    // Audit log the DML operation
+                    AuditService.LogDmlOperation(
+                        operation: queryType.ToString().ToUpper(),
+                        query: query,
+                        rowsAffected: rowsAffected,
+                        hadConfirmation: confirm_unsafe_operation,
+                        parameters: parameters,
+                        executionTimeMs: sw.ElapsedMilliseconds,
+                        correlationId: corr.ToString()
+                    );
 
                     sw.Stop();
                     LoggingHelper.LogEnd(corr, "ReadQuery", true, sw.ElapsedMilliseconds);

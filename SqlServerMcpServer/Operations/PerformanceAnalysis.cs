@@ -4,6 +4,7 @@ using SqlServerMcpServer.Configuration;
 using SqlServerMcpServer.Security;
 using SqlServerMcpServer.Utilities;
 using System.ComponentModel;
+using System.Text;
 
 namespace SqlServerMcpServer.Operations
 {
@@ -429,6 +430,306 @@ namespace SqlServerMcpServer.Operations
                 sw.Stop();
                 var context = ErrorHelper.CreateErrorContextFromException(ex, "GetIndexFragmentation");
                 LoggingHelper.LogEnd(Guid.Empty, "GetIndexFragmentation", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
+        }
+
+        /// <summary>
+        /// Get comprehensive database-wide index fragmentation report with summary statistics
+        /// </summary>
+        /// <param name="minFragmentation">Minimum fragmentation percentage to include (default: 5.0)</param>
+        /// <param name="minSizeMB">Minimum index size in MB to include (default: 1)</param>
+        /// <param name="includeSystemTables">Include system table indexes (default: false)</param>
+        /// <returns>Comprehensive index fragmentation report as JSON string</returns>
+        [McpServerTool, Description("Get comprehensive database-wide index fragmentation report with summary statistics and maintenance recommendations")]
+        public static async Task<string> GetDatabaseIndexFragmentationReport(
+            [Description("Minimum fragmentation percentage to include (default: 5.0)")] decimal minFragmentation = 5.0m,
+            [Description("Minimum index size in MB to include (default: 1)")] decimal minSizeMB = 1.0m,
+            [Description("Include system table indexes (default: false)")] bool includeSystemTables = false)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var corr = LoggingHelper.LogStart("GetDatabaseIndexFragmentationReport", $"minFrag:{minFragmentation}, minSize:{minSizeMB}, includeSystem:{includeSystemTables}");
+                using var connection = SqlConnectionManager.CreateConnection();
+                await connection.OpenAsync();
+
+                var query = @"
+                    SELECT
+                        OBJECT_NAME(ind.OBJECT_ID) AS table_name,
+                        SCHEMA_NAME(t.schema_id) AS schema_name,
+                        ind.name AS index_name,
+                        ind.type_desc AS index_type,
+                        ind.is_primary_key,
+                        ind.is_unique,
+                        ind.is_disabled,
+                        ind.fill_factor,
+                        ps.avg_fragmentation_in_percent,
+                        ps.fragment_count,
+                        ps.page_count,
+                        CONVERT(DECIMAL(15,2), (ps.page_count * 8.0) / 1024.0) AS size_mb,
+                        ps.avg_page_space_used_in_percent,
+                        ps.record_count,
+                        ps.ghost_record_count,
+                        ius.user_seeks,
+                        ius.user_scans,
+                        ius.user_lookups,
+                        ius.user_updates,
+                        ius.last_user_seek,
+                        ius.last_user_scan,
+                        ius.last_user_lookup
+                    FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') ps
+                    INNER JOIN sys.indexes ind ON ps.object_id = ind.object_id AND ps.index_id = ind.index_id
+                    INNER JOIN sys.tables t ON ind.object_id = t.object_id
+                    LEFT JOIN sys.dm_db_index_usage_stats ius ON ps.object_id = ius.object_id
+                        AND ps.index_id = ius.index_id
+                        AND ius.database_id = DB_ID()
+                    WHERE ps.avg_fragmentation_in_percent >= @MinFragmentation
+                    AND CONVERT(DECIMAL(15,2), (ps.page_count * 8.0) / 1024.0) >= @MinSizeMB
+                    AND ind.name IS NOT NULL
+                    AND (@IncludeSystemTables = 1 OR t.is_ms_shipped = 0)
+                    ORDER BY ps.avg_fragmentation_in_percent DESC, table_name, index_name";
+
+                using var command = new SqlCommand(query, connection);
+                command.Parameters.AddWithValue("@MinFragmentation", minFragmentation);
+                command.Parameters.AddWithValue("@MinSizeMB", minSizeMB);
+                command.Parameters.AddWithValue("@IncludeSystemTables", includeSystemTables);
+
+                using var reader = await command.ExecuteReaderAsync();
+                
+                var indexes = new List<Dictionary<string, object>>();
+                var tableSummary = new Dictionary<string, Dictionary<string, object>>();
+                
+                int highFragCount = 0;
+                int mediumFragCount = 0;
+                int lowFragCount = 0;
+                int disabledCount = 0;
+                decimal totalSizeMB = 0;
+                decimal totalFragmentation = 0;
+
+                while (await reader.ReadAsync())
+                {
+                    var fragmentation = Convert.ToDecimal(reader["avg_fragmentation_in_percent"]);
+                    var sizeMb = Convert.ToDecimal(reader["size_mb"]);
+                    var isDisabled = Convert.ToBoolean(reader["is_disabled"]);
+                    var tableName = reader["table_name"].ToString()!;
+                    var schemaName = reader["schema_name"].ToString()!;
+                    var fullTableName = $"{schemaName}.{tableName}";
+                    
+                    string fragmentationLevel;
+                    string recommendation;
+                    string priority;
+
+                    if (isDisabled)
+                    {
+                        fragmentationLevel = "DISABLED";
+                        recommendation = "Index is disabled - evaluate if needed or rebuild";
+                        priority = "LOW";
+                        disabledCount++;
+                    }
+                    else if (fragmentation >= 30.0m)
+                    {
+                        fragmentationLevel = "HIGH";
+                        recommendation = sizeMb > 100
+                            ? "REBUILD ONLINE (large index)"
+                            : "REBUILD";
+                        priority = sizeMb > 100 ? "HIGH" : "MEDIUM";
+                        highFragCount++;
+                    }
+                    else if (fragmentation >= 10.0m)
+                    {
+                        fragmentationLevel = "MEDIUM";
+                        recommendation = "REORGANIZE";
+                        priority = "LOW";
+                        mediumFragCount++;
+                    }
+                    else
+                    {
+                        fragmentationLevel = "LOW";
+                        recommendation = "MONITOR";
+                        priority = "LOW";
+                        lowFragCount++;
+                    }
+
+                    var index = new Dictionary<string, object>
+                    {
+                        ["table_name"] = tableName,
+                        ["schema_name"] = schemaName,
+                        ["index_name"] = reader["index_name"].ToString()!,
+                        ["index_type"] = reader["index_type"].ToString()!,
+                        ["is_primary_key"] = Convert.ToBoolean(reader["is_primary_key"]),
+                        ["is_unique"] = Convert.ToBoolean(reader["is_unique"]),
+                        ["is_disabled"] = isDisabled,
+                        ["fill_factor"] = Convert.ToInt32(reader["fill_factor"]),
+                        ["avg_fragmentation_in_percent"] = fragmentation,
+                        ["fragment_count"] = Convert.ToInt64(reader["fragment_count"]),
+                        ["page_count"] = Convert.ToInt64(reader["page_count"]),
+                        ["size_mb"] = sizeMb,
+                        ["avg_page_space_used_in_percent"] = Convert.ToDecimal(reader["avg_page_space_used_in_percent"]),
+                        ["record_count"] = Convert.ToInt64(reader["record_count"]),
+                        ["ghost_record_count"] = Convert.ToInt64(reader["ghost_record_count"]),
+                        ["usage_stats"] = new Dictionary<string, object>
+                        {
+                            ["user_seeks"] = reader["user_seeks"] != DBNull.Value ? Convert.ToInt64(reader["user_seeks"]) : 0,
+                            ["user_scans"] = reader["user_scans"] != DBNull.Value ? Convert.ToInt64(reader["user_scans"]) : 0,
+                            ["user_lookups"] = reader["user_lookups"] != DBNull.Value ? Convert.ToInt64(reader["user_lookups"]) : 0,
+                            ["user_updates"] = reader["user_updates"] != DBNull.Value ? Convert.ToInt64(reader["user_updates"]) : 0,
+                            ["last_user_seek"] = reader["last_user_seek"] != DBNull.Value ? Convert.ToDateTime(reader["last_user_seek"]) : null,
+                            ["last_user_scan"] = reader["last_user_scan"] != DBNull.Value ? Convert.ToDateTime(reader["last_user_scan"]) : null
+                        },
+                        ["fragmentation_level"] = fragmentationLevel,
+                        ["recommendation"] = recommendation,
+                        ["priority"] = priority,
+                        ["can_rebuild_online"] = reader["index_type"].ToString() != "HEAP" && reader["index_type"].ToString() != "XML"
+                    };
+
+                    indexes.Add(index);
+
+                    // Update table summary
+                    if (!tableSummary.ContainsKey(fullTableName))
+                    {
+                        tableSummary[fullTableName] = new Dictionary<string, object>
+                        {
+                            ["table_name"] = tableName,
+                            ["schema_name"] = schemaName,
+                            ["index_count"] = 0,
+                            ["fragmented_index_count"] = 0,
+                            ["avg_fragmentation"] = 0m,
+                            ["total_size_mb"] = 0m,
+                            ["highest_fragmentation"] = 0m
+                        };
+                    }
+
+                    tableSummary[fullTableName]["index_count"] = Convert.ToInt32(tableSummary[fullTableName]["index_count"]) + 1;
+                    tableSummary[fullTableName]["total_size_mb"] = Convert.ToDecimal(tableSummary[fullTableName]["total_size_mb"]) + sizeMb;
+                    
+                    if (fragmentation >= 10.0m)
+                    {
+                        tableSummary[fullTableName]["fragmented_index_count"] = Convert.ToInt32(tableSummary[fullTableName]["fragmented_index_count"]) + 1;
+                    }
+                    
+                    var currentAvg = Convert.ToDecimal(tableSummary[fullTableName]["avg_fragmentation"]);
+                    var currentCount = Convert.ToInt32(tableSummary[fullTableName]["index_count"]);
+                    tableSummary[fullTableName]["avg_fragmentation"] = (currentAvg * (currentCount - 1) + fragmentation) / currentCount;
+                    
+                    var currentHighest = Convert.ToDecimal(tableSummary[fullTableName]["highest_fragmentation"]);
+                    if (fragmentation > currentHighest)
+                    {
+                        tableSummary[fullTableName]["highest_fragmentation"] = fragmentation;
+                    }
+
+                    // Update totals
+                    totalSizeMB += sizeMb;
+                    totalFragmentation += fragmentation;
+                }
+
+                // Sort table summary by highest fragmentation
+                var sortedTableSummary = tableSummary.Values
+                    .OrderByDescending(t => Convert.ToDecimal(t["highest_fragmentation"]))
+                    .Take(20)
+                    .ToList();
+
+                // Generate maintenance script
+                var maintenanceScript = new StringBuilder();
+                maintenanceScript.AppendLine("-- Index Maintenance Script Generated by SQL Server MCP Server");
+                maintenanceScript.AppendLine($"-- Generated at: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+                maintenanceScript.AppendLine($"-- Database: {SqlConnectionManager.CurrentDatabase}");
+                maintenanceScript.AppendLine();
+                
+                // High priority rebuilds (fragmentation >= 30%)
+                var highPriorityRebuilds = indexes
+                    .Where(i => i["fragmentation_level"].ToString() == "HIGH" && !(bool)i["is_disabled"])
+                    .OrderByDescending(i => Convert.ToDecimal(i["size_mb"]))
+                    .ToList();
+
+                if (highPriorityRebuilds.Any())
+                {
+                    maintenanceScript.AppendLine("-- HIGH PRIORITY: Rebuild indexes with >= 30% fragmentation");
+                    maintenanceScript.AppendLine("-- These operations may take significant time for large indexes");
+                    maintenanceScript.AppendLine();
+                    
+                    foreach (var idx in highPriorityRebuilds)
+                    {
+                        var onlineClause = (bool)idx["can_rebuild_online"] ? " WITH (ONLINE = ON)" : "";
+                        maintenanceScript.AppendLine($"ALTER INDEX [{idx["index_name"]}] ON [{idx["schema_name"]}].[{idx["table_name"]}] REBUILD{onlineClause};");
+                        maintenanceScript.AppendLine($"-- Size: {idx["size_mb"]:F2} MB, Fragmentation: {idx["avg_fragmentation_in_percent"]:F2}%");
+                        maintenanceScript.AppendLine();
+                    }
+                }
+
+                // Medium priority reorganizes (fragmentation 10-30%)
+                var mediumPriorityReorganizes = indexes
+                    .Where(i => i["fragmentation_level"].ToString() == "MEDIUM" && !(bool)i["is_disabled"])
+                    .OrderByDescending(i => Convert.ToDecimal(i["size_mb"]))
+                    .ToList();
+
+                if (mediumPriorityReorganizes.Any())
+                {
+                    maintenanceScript.AppendLine("-- MEDIUM PRIORITY: Reorganize indexes with 10-30% fragmentation");
+                    maintenanceScript.AppendLine();
+                    
+                    foreach (var idx in mediumPriorityReorganizes)
+                    {
+                        maintenanceScript.AppendLine($"ALTER INDEX [{idx["index_name"]}] ON [{idx["schema_name"]}].[{idx["table_name"]}] REORGANIZE;");
+                        maintenanceScript.AppendLine($"-- Size: {idx["size_mb"]:F2} MB, Fragmentation: {idx["avg_fragmentation_in_percent"]:F2}%");
+                        maintenanceScript.AppendLine();
+                    }
+                }
+
+                var indexCount = indexes.Count;
+                var payload = new
+                {
+                    server_name = SqlConnectionManager.ServerName,
+                    environment = SqlConnectionManager.Environment,
+                    database = SqlConnectionManager.CurrentDatabase,
+                    report_generated_at = DateTime.UtcNow,
+                    summary = new
+                    {
+                        total_indexes_analyzed = indexCount,
+                        total_size_mb = Math.Round(totalSizeMB, 2),
+                        avg_fragmentation_percent = indexCount > 0 ? Math.Round(totalFragmentation / indexCount, 2) : 0,
+                        fragmentation_breakdown = new
+                        {
+                            high_fragmentation_count = highFragCount,
+                            medium_fragmentation_count = mediumFragCount,
+                            low_fragmentation_count = lowFragCount,
+                            disabled_count = disabledCount
+                        },
+                        recommendations_summary = new
+                        {
+                            rebuild_count = highFragCount,
+                            reorganize_count = mediumFragCount,
+                            monitor_count = lowFragCount
+                        }
+                    },
+                    top_fragmented_tables = sortedTableSummary,
+                    indexes = indexes.Take(50).ToList(), // Limit to top 50 most fragmented
+                    maintenance_script = maintenanceScript.ToString(),
+                    filters_applied = new
+                    {
+                        min_fragmentation_percent = minFragmentation,
+                        min_size_mb = minSizeMB,
+                        include_system_tables = includeSystemTables
+                    }
+                };
+                sw.Stop();
+                LoggingHelper.LogEnd(corr, "GetDatabaseIndexFragmentationReport", true, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(payload);
+            }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetDatabaseIndexFragmentationReport");
+                LoggingHelper.LogEnd(Guid.Empty, "GetDatabaseIndexFragmentationReport", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetDatabaseIndexFragmentationReport");
+                LoggingHelper.LogEnd(Guid.Empty, "GetDatabaseIndexFragmentationReport", false, sw.ElapsedMilliseconds, ex.Message);
                 var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(response);
             }

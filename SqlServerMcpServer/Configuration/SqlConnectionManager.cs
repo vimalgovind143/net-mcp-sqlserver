@@ -11,11 +11,12 @@ namespace SqlServerMcpServer.Configuration
     /// </summary>
     public static class SqlConnectionManager
     {
-        private static string _currentConnectionString =
+        private static readonly string _configuredConnectionString =
             System.Environment.GetEnvironmentVariable("SQLSERVER_CONNECTION_STRING")
             ?? GetConfigValue("SqlServer", "ConnectionString")
-            ?? "Server=localhost,14333;Database=master;User Id=sa;Password=Your_Str0ng_Pass!;TrustServerCertificate=true;";
+            ?? string.Empty;
 
+        private static string _currentConnectionString = _configuredConnectionString;
         private static string _currentDatabase = GetDatabaseFromConnectionString(_currentConnectionString);
         private static string _serverName = System.Environment.GetEnvironmentVariable("MCP_SERVER_NAME") ?? "SQL Server MCP";
         private static string _environment = System.Environment.GetEnvironmentVariable("MCP_ENVIRONMENT") ?? "unknown";
@@ -26,6 +27,12 @@ namespace SqlServerMcpServer.Configuration
         {
             Console.Error.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [INFO] SqlConnectionManager static constructor called");
             Console.Error.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [INFO] Initializing with database: {_currentDatabase}");
+            
+            if (string.IsNullOrWhiteSpace(_configuredConnectionString))
+            {
+                Console.Error.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [WARN] No database connection string configured. " +
+                    "Please set SQLSERVER_CONNECTION_STRING environment variable or configure SqlServer:ConnectionString in appsettings.json.");
+            }
         }
 
         /// <summary>
@@ -57,8 +64,16 @@ namespace SqlServerMcpServer.Configuration
         /// Creates a new SQL connection with the current connection string
         /// </summary>
         /// <returns>A new SqlConnection instance</returns>
+        /// <exception cref="InvalidOperationException">Thrown when no connection string is configured</exception>
         public static SqlConnection CreateConnection()
         {
+            if (string.IsNullOrWhiteSpace(_currentConnectionString))
+            {
+                throw new InvalidOperationException(
+                    "No database connection string configured. " +
+                    "Please set the SQLSERVER_CONNECTION_STRING environment variable or configure SqlServer:ConnectionString in appsettings.json. " +
+                    "Example: Server=localhost;Database=master;User Id=sa;Password=YourPassword;TrustServerCertificate=true;");
+            }
             return new SqlConnection(_currentConnectionString);
         }
 
@@ -174,6 +189,11 @@ namespace SqlServerMcpServer.Configuration
         /// <returns>Database name or "master" if not found</returns>
         private static string GetDatabaseFromConnectionString(string connectionString)
         {
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                return "not_configured";
+            }
+            
             try
             {
                 var builder = new SqlConnectionStringBuilder(connectionString);

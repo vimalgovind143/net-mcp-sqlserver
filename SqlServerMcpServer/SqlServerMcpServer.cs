@@ -66,6 +66,7 @@ namespace SqlServerMcpServer
         /// Execute a SQL query on the current database with pagination and metadata
         /// </summary>
         /// <param name="query">The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)</param>
+        /// <param name="parameters">Named parameters to bind (e.g., { "id": 123, "name": "John" })</param>
         /// <param name="maxRows">Maximum rows to return (default 100, max 1000)</param>
         /// <param name="offset">Offset for pagination (default: 0)</param>
         /// <param name="pageSize">Page size for pagination (default: 100, max: 1000)</param>
@@ -75,13 +76,14 @@ namespace SqlServerMcpServer
         [McpServerTool, Description("Execute a SQL query on the current database with pagination and metadata (supports SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")]
         public static async Task<string> ExecuteQueryAsync(
             [Description("The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)")] string query,
+            [Description("Named parameters to bind (e.g., { id: 123, name: 'John' })")] Dictionary<string, object>? parameters = null,
             [Description("Maximum rows to return (default 100, max 1000)")] int? maxRows = 100,
             [Description("Offset for pagination (default: 0)")] int? offset = 0,
             [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
             [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false,
             [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false)
         {
-            return await QueryExecution.ExecuteQueryAsync(query, maxRows, offset, pageSize, includeStatistics, confirmUnsafeOperation);
+            return await QueryExecution.ExecuteQueryAsync(query, parameters, maxRows, offset, pageSize, includeStatistics, confirmUnsafeOperation);
         }
 
         /// <summary>
@@ -284,6 +286,22 @@ namespace SqlServerMcpServer
             return await PerformanceAnalysis.GetIndexFragmentation(tableName, schemaName, minFragmentation, includeOnlineStatus);
         }
 
+        /// <summary>
+        /// Get comprehensive database-wide index fragmentation report with summary statistics
+        /// </summary>
+        /// <param name="minFragmentation">Minimum fragmentation percentage to include (default: 5.0)</param>
+        /// <param name="minSizeMB">Minimum index size in MB to include (default: 1)</param>
+        /// <param name="includeSystemTables">Include system table indexes (default: false)</param>
+        /// <returns>Comprehensive index fragmentation report as JSON string</returns>
+        [McpServerTool, Description("Get comprehensive database-wide index fragmentation report with summary statistics and maintenance recommendations")]
+        public static async Task<string> GetDatabaseIndexFragmentationReportAsync(
+            [Description("Minimum fragmentation percentage to include (default: 5.0)")] decimal minFragmentation = 5.0m,
+            [Description("Minimum index size in MB to include (default: 1)")] decimal minSizeMB = 1.0m,
+            [Description("Include system table indexes (default: false)")] bool includeSystemTables = false)
+        {
+            return await PerformanceAnalysis.GetDatabaseIndexFragmentationReport(minFragmentation, minSizeMB, includeSystemTables);
+        }
+
         // ==================== Data Discovery Operations ====================
 
         [McpServerTool, Description("Search for data across tables with pattern matching")]
@@ -422,6 +440,64 @@ namespace SqlServerMcpServer
             catch (Exception ex)
             {
                 var context = ErrorHelper.CreateErrorContextFromException(ex, "GetConnectionPoolStats");
+                var response = ResponseFormatter.CreateErrorContextResponse(context, 0);
+                return ResponseFormatter.ToJson(response);
+            }
+        }
+
+        // ==================== Audit & Security Diagnostics ====================
+
+        [McpServerTool, Description("Get audit log statistics for DML operations")]
+        public static string GetAuditStatistics()
+        {
+            try
+            {
+                var stats = AuditService.GetAuditStatistics();
+
+                var payload = new
+                {
+                    server_name = SqlConnectionManager.ServerName,
+                    environment = SqlConnectionManager.Environment,
+                    database = SqlConnectionManager.CurrentDatabase,
+                    audit_statistics = stats,
+                    operation_type = "AUDIT",
+                    security_mode = "READ_ONLY_ENFORCED"
+                };
+
+                return ResponseFormatter.ToJson(payload);
+            }
+            catch (Exception ex)
+            {
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetAuditStatistics");
+                var response = ResponseFormatter.CreateErrorContextResponse(context, 0);
+                return ResponseFormatter.ToJson(response);
+            }
+        }
+
+        [McpServerTool, Description("Get rate limiting statistics and current limits")]
+        public static string GetRateLimitStatistics()
+        {
+            try
+            {
+                var stats = RateLimiter.GetGlobalStatistics();
+                var config = RateLimiter.GetConfig();
+
+                var payload = new
+                {
+                    server_name = SqlConnectionManager.ServerName,
+                    environment = SqlConnectionManager.Environment,
+                    database = SqlConnectionManager.CurrentDatabase,
+                    rate_limit_statistics = stats,
+                    configuration = config,
+                    operation_type = "SECURITY",
+                    security_mode = "READ_ONLY_ENFORCED"
+                };
+
+                return ResponseFormatter.ToJson(payload);
+            }
+            catch (Exception ex)
+            {
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetRateLimitStatistics");
                 var response = ResponseFormatter.CreateErrorContextResponse(context, 0);
                 return ResponseFormatter.ToJson(response);
             }

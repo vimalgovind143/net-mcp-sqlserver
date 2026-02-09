@@ -8,14 +8,14 @@ namespace SqlServerMcpServer.Tests
     public class SqlConnectionManagerTests
     {
         [Fact]
-        public void CurrentConnectionString_ReturnsNonNullValue()
+        public void CurrentConnectionString_ReturnsValueOrNotConfigured()
         {
             // Act
             var connectionString = SqlConnectionManager.CurrentConnectionString;
 
-            // Assert
+            // Assert - connection string may be empty if not configured
             Assert.NotNull(connectionString);
-            Assert.True(connectionString.Length > 0);
+            // Either it's configured, or it returns empty string (which is valid for the property)
         }
 
         [Fact]
@@ -62,14 +62,34 @@ namespace SqlServerMcpServer.Tests
         }
 
         [Fact]
-        public void CreateConnection_ReturnsValidSqlConnection()
+        public void CreateConnection_WithConfiguredConnectionString_ReturnsValidSqlConnection()
         {
+            // Skip if no connection string is configured
+            if (string.IsNullOrWhiteSpace(SqlConnectionManager.CurrentConnectionString))
+            {
+                return; // Skip test - no connection string configured
+            }
+
             // Act
             using var connection = SqlConnectionManager.CreateConnection();
 
             // Assert
             Assert.NotNull(connection);
             Assert.Equal(SqlConnectionManager.CurrentConnectionString, connection.ConnectionString);
+        }
+
+        [Fact]
+        public void CreateConnection_WithoutConfiguredConnectionString_ThrowsInvalidOperationException()
+        {
+            // This test only applies when no connection string is configured
+            if (!string.IsNullOrWhiteSpace(SqlConnectionManager.CurrentConnectionString))
+            {
+                return; // Skip test - connection string is configured
+            }
+
+            // Act & Assert
+            var exception = Assert.Throws<InvalidOperationException>(() => SqlConnectionManager.CreateConnection());
+            Assert.Contains("No database connection string configured", exception.Message);
         }
 
         [Fact]

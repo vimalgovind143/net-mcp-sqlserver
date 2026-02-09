@@ -26,6 +26,9 @@ namespace SqlServerMcpServer.Utilities
         [Description("AUTHENTICATION_FAILED")]
         AuthenticationFailed,
 
+        [Description("RATE_LIMIT_EXCEEDED")]
+        RateLimitExceeded,
+
         // SQL Errors
         [Description("SQL_SYNTAX_ERROR")]
         SqlSyntaxError,
@@ -68,6 +71,9 @@ namespace SqlServerMcpServer.Utilities
         CannotOpenDatabase,
 
         // Execution Errors
+        [Description("QUERY_TOO_COMPLEX")]
+        QueryTooComplex,
+
         [Description("QUERY_TIMEOUT")]
         QueryTimeout,
 
