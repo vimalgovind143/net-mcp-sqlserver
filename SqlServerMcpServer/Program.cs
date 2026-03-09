@@ -38,12 +38,12 @@ builder.Services
     {
         options.ServerInfo = new Implementation
         {
-            Name = "sqlserver-mcp-server",
+            Name = serverDisplayName,
             Title = serverDisplayName,
             Version = serverVersion,
             Description = "SQL Server MCP server for schema inspection, diagnostics, and query execution with safety checks."
         };
-        options.ServerInstructions = "Use these tools to inspect SQL Server schemas, metadata, diagnostics, and query results. Prefer targeted schema tools before broad queries, and treat write-oriented SQL as restricted unless explicitly confirmed.";
+        options.ServerInstructions = "Use these tools to inspect SQL Server schemas, metadata, diagnostics, and query results. Prefer targeted schema tools before broad queries. This server is intended for read-only workflows, and write-oriented SQL should be treated as blocked for safety.";
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly(typeof(SqlServerTools).Assembly);

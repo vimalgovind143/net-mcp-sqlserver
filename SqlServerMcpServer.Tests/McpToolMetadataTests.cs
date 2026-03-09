@@ -30,7 +30,7 @@ namespace SqlServerMcpServer.Tests
                 var description = method.GetCustomAttribute<DescriptionAttribute>();
 
                 Assert.NotNull(description);
-                Assert.False(string.IsNullOrWhiteSpace(description!.Description), $"Tool '{method.Name}' is missing a non-empty Description attribute.");
+                Assert.False(string.IsNullOrWhiteSpace(description?.Description), $"Tool '{method.Name}' is missing a non-empty Description attribute.");
             }
         }
 
@@ -46,7 +46,7 @@ namespace SqlServerMcpServer.Tests
                     var description = parameter.GetCustomAttribute<DescriptionAttribute>();
 
                     Assert.NotNull(description);
-                    Assert.False(string.IsNullOrWhiteSpace(description!.Description), $"Parameter '{parameter.Name}' on tool '{method.Name}' is missing a non-empty Description attribute.");
+                    Assert.False(string.IsNullOrWhiteSpace(description?.Description), $"Parameter '{parameter.Name}' on tool '{method.Name}' is missing a non-empty Description attribute.");
                 }
             }
         }
