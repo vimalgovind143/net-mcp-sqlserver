@@ -425,8 +425,8 @@ To test the server locally:
 ## Dependencies
 
 - `ModelContextProtocol` (1.1.0) - Official MCP C# SDK
-- `Microsoft.Data.SqlClient` (5.2.2) - SQL Server connectivity
-- `Microsoft.Extensions.Hosting` (10.0.0) - Host infrastructure
+- `Microsoft.Data.SqlClient` (6.1.3) - SQL Server connectivity
+- `Microsoft.Extensions.Hosting` (10.0.1) - Host infrastructure
 
 ## License
 
