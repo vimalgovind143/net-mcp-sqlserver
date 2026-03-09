@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Microsoft.Extensions.Configuration;
 using Serilog;
@@ -23,15 +24,29 @@ var builder = Host.CreateApplicationBuilder(args);
 
 // Load JSON configuration if present (appsettings.json)
 builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+var serverDisplayName = builder.Configuration["MCP_SERVER_NAME"] ?? "SQL Server MCP";
+var serverVersion = typeof(SqlServerTools).Assembly.GetName().Version is { } version
+    ? $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}"
+    : "1.0.0";
 
 // Configure file-only logging
 builder.Logging.ClearProviders();
 builder.Logging.AddSerilog(Log.Logger, dispose: true);
 
 builder.Services
-    .AddMcpServer()
+    .AddMcpServer(options =>
+    {
+        options.ServerInfo = new Implementation
+        {
+            Name = serverDisplayName,
+            Title = serverDisplayName,
+            Version = serverVersion,
+            Description = "SQL Server MCP server for schema inspection, diagnostics, and query execution with safety checks."
+        };
+        options.ServerInstructions = "Use these tools to inspect SQL Server schemas, metadata, diagnostics, and query results. Prefer targeted schema tools before broad queries. This server is intended for read-only workflows, and write-oriented SQL should be treated as blocked for safety.";
+    })
     .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    .WithToolsFromAssembly(typeof(SqlServerTools).Assembly);
 
 var host = builder.Build();
 
