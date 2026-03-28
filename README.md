@@ -13,6 +13,7 @@ A Model Context Protocol (MCP) server that provides tools for interacting with M
 - **Connection Info**: Display current database connection status
 - **Stored Procedures**: List stored procedures with schema and dates, get detailed info including parameters, definitions, and dependencies
 - **Object Definition**: Unified endpoint to get detailed information for any database object (procedures, functions, views) including definitions, parameters/columns, and dependencies
+- **Batch Object Definitions**: Request multiple object definitions in one call with limits and per-object status
 - **Health Check**: Verify connectivity and view server properties
 - **Structured Logging**: JSON logs to stderr with correlation IDs and timings
  - **Serilog Integration**: Structured logging via Serilog with JSON formatting
@@ -349,7 +350,27 @@ Get information about the function fn_CalculateDiscount in the sales schema
 - `columns` - (For views) Column schema with data types and properties
 - `dependencies` - All database objects referenced by this object
 
-### 10. GetServerHealth
+### 10. GetObjectDefinitions
+Fetch definitions for multiple database objects in a single call with built-in limits and per-object status.
+
+**Parameters:**
+- `objectNames` (string): Comma- or newline-separated list of object names; schema can be supplied as `schema.object`
+- `schemaName` (string, optional): Default schema name when not provided (defaults to "dbo")
+- `objectType` (string, optional): 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' (default) to auto-detect per object
+- `maxObjects` (int, optional): Maximum number of objects to process (default 10, capped at 25)
+
+**Behavior:**
+- Processes distinct object names up to `maxObjects`
+- Uses auto-detection unless a type is forced
+- Returns per-object status (`OK` or `NOT_FOUND`) so missing objects don't block the batch
+- Includes dependency, parameter (procedures/functions), and column (views) details per object
+
+**Example Usage:**
+```
+GetObjectDefinitions objectNames="dbo.Users, dbo.Orders, reporting.vw_Sales" maxObjects=5
+```
+
+### 11. GetServerHealth
 Check connectivity and return server properties.
 
 **Parameters:** None
@@ -424,9 +445,9 @@ To test the server locally:
 
 ## Dependencies
 
-- `ModelContextProtocol` (1.1.0) - Official MCP C# SDK
-- `Microsoft.Data.SqlClient` (6.1.3) - SQL Server connectivity
-- `Microsoft.Extensions.Hosting` (10.0.1) - Host infrastructure
+- `ModelContextProtocol` (1.2.0) - Official MCP C# SDK
+- `Microsoft.Data.SqlClient` (7.0.0) - SQL Server connectivity
+- `Microsoft.Extensions.Hosting` (10.0.5) - Host infrastructure
 
 ## License
 
