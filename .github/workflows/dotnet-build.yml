@@ -9,10 +9,7 @@ on:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest]
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository

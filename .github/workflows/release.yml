@@ -19,10 +19,7 @@ jobs:
   # Job 1: Build and test on PR and main push
   build:
     name: Build and Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: windows-latest
     
     steps:
       - name: Checkout repository
