@@ -78,7 +78,7 @@ With the current repository setup and SDK usage, this is not just a configuratio
 
 ## Similar Database MCP Patterns to Learn From
 
-Verified against public documentation in **March 2026**:
+Examples referenced during this investigation (**March 2026**); revalidate them before implementation work:
 
 - **[Azure Data API Builder SQL MCP Server overview](https://learn.microsoft.com/en-us/azure/data-api-builder/mcp/overview)** - good reference for remote hosting, identity integration, and granular data exposure
 - **[Google Cloud managed MCP servers for databases](https://cloud.google.com/blog/products/databases/managed-mcp-servers-for-google-cloud-databases)** - good reference for hosted MCP, IAM-backed access, and managed observability
