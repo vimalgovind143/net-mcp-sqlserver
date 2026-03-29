@@ -41,7 +41,7 @@ jobs:
         run: dotnet build SqlServerMcpServer.sln --configuration Release --no-restore
 
       - name: Run Tests
-        run: dotnet test SqlServerMcpServer.Tests/SqlServerMcpServer.Tests.csproj --configuration Release --no-build --verbosity normal
+        run: dotnet test SqlServerMcpServer.Tests/SqlServerMcpServer.Tests.csproj --configuration Release --verbosity normal
 
   # Job 2: Build Windows binary (only on tag push)
   build-windows:
