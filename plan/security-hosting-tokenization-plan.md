@@ -49,6 +49,8 @@ Right now this project is set up for **local stdio hosting**, which works well f
 - secret management for database credentials
 - request throttling, audit logging, and deployment packaging
 
+With the current repository setup and SDK usage, this is not just a configuration change: it would require either native HTTP transport support in the MCP stack being used or a custom HTTP wrapper/gateway around the current stdio-based server process.
+
 ## Recommended Hosted Deployment Pattern
 
 1. Keep the SQL Server login itself **read-only and least-privileged**
@@ -103,7 +105,7 @@ Common patterns across those systems:
 
 ### Phase 2 - Prepare for hosted deployment
 
-- Add or adopt an HTTP MCP transport
+- Add or adopt an HTTP MCP transport, or introduce a custom gateway around the existing stdio server
 - Containerize the app
 - Add health checks, readiness checks, and centralized telemetry
 - Introduce gateway-based authentication, TLS, and rate limiting
