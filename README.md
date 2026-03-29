@@ -486,10 +486,12 @@ Right now this project is set up for **local stdio hosting**, which works well f
 
 ### Similar Database MCP Patterns to Learn From
 
-- **Microsoft SQL MCP Server / Azure Data API Builder MCP** - good reference for remote hosting, identity integration, and granular data exposure
-- **Google Cloud managed MCP servers for databases** - good reference for hosted MCP, IAM-backed access, and managed observability
-- **Oracle Database MCP Server** - good reference for auditability and least-privilege database accounts
-- **AWS database MCP servers** - good reference for token-based cloud access, IAM, and centralized audit trails
+Verified against public documentation in **March 2026**:
+
+- **[Azure Data API Builder SQL MCP Server overview](https://learn.microsoft.com/en-us/azure/data-api-builder/mcp/overview)** - good reference for remote hosting, identity integration, and granular data exposure
+- **[Google Cloud managed MCP servers for databases](https://cloud.google.com/blog/products/databases/managed-mcp-servers-for-google-cloud-databases)** - good reference for hosted MCP, IAM-backed access, and managed observability
+- **[Oracle MCP Server for Oracle Database](https://blogs.oracle.com/database/introducing-mcp-server-for-oracle-database)** - good reference for auditability and least-privilege database accounts
+- **[AWS MCP servers for databases](https://aws.amazon.com/blogs/database/supercharging-aws-database-development-with-aws-mcp-servers/)** - good reference for token-based cloud access, IAM, and centralized audit trails
 
 Common patterns across those systems:
 
