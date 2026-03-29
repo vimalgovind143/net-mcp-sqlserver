@@ -1,13 +1,13 @@
 name: Build and Release
 
 on:
-  # Build on every PR to main for validation
+  # Build on every PR to master for validation
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
   
-  # Build on push to main or tags
+  # Build on push to master or tags
   push:
-    branches: [ main ]
+    branches: [ master ]
     tags:
       - 'v*.*.*'
 
@@ -35,14 +35,13 @@ jobs:
           include-prerelease: true
 
       - name: Restore dependencies
-        run: dotnet restore SqlServerMcpServer/SqlServerMcpServer.csproj
+        run: dotnet restore SqlServerMcpServer.sln
 
       - name: Build
-        run: dotnet build SqlServerMcpServer/SqlServerMcpServer.csproj --configuration Release --no-restore
+        run: dotnet build SqlServerMcpServer.sln --configuration Release --no-restore
 
-      - name: Test (if tests exist)
-        run: dotnet test --configuration Release --no-build --verbosity normal
-        continue-on-error: true
+      - name: Run Tests
+        run: dotnet test SqlServerMcpServer.Tests/SqlServerMcpServer.Tests.csproj --configuration Release --no-build --verbosity normal
 
   # Job 2: Build Windows binary (only on tag push)
   build-windows:
