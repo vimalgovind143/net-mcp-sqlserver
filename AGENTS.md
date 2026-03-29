@@ -19,11 +19,11 @@ This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the
 | Component | Technology | Version |
 |-----------|-----------|---------|
 | Runtime | .NET 10.0 | net10.0 |
-| MCP SDK | ModelContextProtocol | 1.1.0 |
-| SQL Client | Microsoft.Data.SqlClient | 6.1.3 |
-| Logging | Serilog | 4.3.0 |
-| Caching | Microsoft.Extensions.Caching.Memory | 10.0.1 |
-| Resilience | Polly | 8.6.5 |
+| MCP SDK | ModelContextProtocol | 1.2.0 |
+| SQL Client | Microsoft.Data.SqlClient | 7.0.0 |
+| Logging | Serilog | 4.3.1 |
+| Caching | Microsoft.Extensions.Caching.Memory | 10.0.5 |
+| Resilience | Polly | 8.6.6 |
 | Testing | xUnit, Moq, FluentAssertions | Latest |
 
 ---

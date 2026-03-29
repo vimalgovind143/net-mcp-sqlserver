@@ -186,6 +186,24 @@ namespace SqlServerMcpServer
             return await SchemaInspection.GetObjectDefinitionAsync(objectName, schemaName, objectType);
         }
 
+        /// <summary>
+        /// Get definitions for multiple database objects in one call
+        /// </summary>
+        /// <param name="objectNames">Comma- or newline-separated list of object names</param>
+        /// <param name="schemaName">Default schema name (defaults to 'dbo')</param>
+        /// <param name="objectType">Object type filter: 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' to auto-detect (default)</param>
+        /// <param name="maxObjects">Maximum number of objects to process (default: 10, max: 25)</param>
+        /// <returns>Batch object definitions as JSON string</returns>
+        [McpServerTool, Description("Get definitions for multiple database objects (procedures, functions, or views) in a single call")]
+        public static async Task<string> GetObjectDefinitionsAsync(
+            [Description("Comma- or newline-separated list of object names")] string objectNames,
+            [Description("Default schema name (defaults to 'dbo')")] string? schemaName = "dbo",
+            [Description("Object type filter: 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' to auto-detect (default)")] string? objectType = "AUTO",
+            [Description("Maximum number of objects to process (default: 10, max: 25)")] int maxObjects = 10)
+        {
+            return await SchemaInspection.GetObjectDefinitionsAsync(objectNames, schemaName, objectType, maxObjects);
+        }
+
         [McpServerTool, Description("Get SQL Server wait statistics")]
         public static async Task<string> GetWaitStatsAsync(
             [Description("Maximum number of wait types to return (default: 20)")] int topN = 20,

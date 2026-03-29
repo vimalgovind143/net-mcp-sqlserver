@@ -740,242 +740,31 @@ namespace SqlServerMcpServer.Operations
             [Description("Object type: 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' to auto-detect (default)")] string? objectType = "AUTO")
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            var resolvedSchema = schemaName ?? "dbo";
+            var corr = LoggingHelper.LogStart("GetObjectDefinition", $"{resolvedSchema}.{objectName}");
             try
             {
-                var corr = LoggingHelper.LogStart("GetObjectDefinition", $"{schemaName}.{objectName}");
                 using var connection = SqlConnectionManager.CreateConnection();
                 await connection.OpenAsync();
 
-                // Auto-detect object type if needed
-                string detectedType = null;
-                if (objectType == null || objectType.ToUpperInvariant() == "AUTO")
+                var definition = await LoadObjectDefinitionAsync(connection, objectName, resolvedSchema, objectType);
+                if (definition is null)
                 {
-                    var typeQuery = @"
-                        SELECT o.type_desc
-                        FROM sys.objects o
-                        INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
-                        WHERE o.name = @objectName AND s.name = @schemaName";
-
-                    using var typeCmd = new SqlCommand(typeQuery, connection)
-                    {
-                        CommandTimeout = SqlConnectionManager.CommandTimeout
-                    };
-                    typeCmd.Parameters.AddWithValue("@objectName", objectName);
-                    typeCmd.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-
-                    var result = await typeCmd.ExecuteScalarAsync();
-                    detectedType = result?.ToString();
-
-                    if (detectedType == null)
-                    {
-                        sw.Stop();
-                        LoggingHelper.LogEnd(corr, "GetObjectDefinition", false, sw.ElapsedMilliseconds, "Object not found");
-                        return ResponseFormatter.ToJson(new
-                        {
-                            server_name = SqlConnectionManager.ServerName,
-                            environment = SqlConnectionManager.Environment,
-                            database = SqlConnectionManager.CurrentDatabase,
-                            error = $"Object '{schemaName}.{objectName}' not found",
-                            operation_type = "NOT_FOUND",
-                            security_mode = "READ_ONLY_ENFORCED"
-                        });
-                    }
-                }
-                else
-                {
-                    detectedType = objectType.ToUpperInvariant();
+                    sw.Stop();
+                    var context = new ErrorContext(ErrorCode.InvalidObject, $"Object '{resolvedSchema}.{objectName}' not found", "GetObjectDefinition");
+                    LoggingHelper.LogEnd(corr, "GetObjectDefinition", false, sw.ElapsedMilliseconds, "Object not found");
+                    return ResponseFormatter.ToJson(ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds));
                 }
 
-                // Get common object information
-                var objectInfoQuery = @"
-                    SELECT
-                        o.name AS object_name,
-                        s.name AS schema_name,
-                        o.type_desc AS object_type,
-                        o.create_date,
-                        o.modify_date,
-                        OBJECT_DEFINITION(o.object_id) AS definition
-                    FROM sys.objects o
-                    INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
-                    WHERE o.name = @objectName AND s.name = @schemaName";
-
-                using var objCmd = new SqlCommand(objectInfoQuery, connection)
+                var payloadData = BuildObjectDefinitionPayload(definition);
+                var metadata = new Dictionary<string, object>
                 {
-                    CommandTimeout = SqlConnectionManager.CommandTimeout
-                };
-                objCmd.Parameters.AddWithValue("@objectName", objectName);
-                objCmd.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-
-                Dictionary<string, object> objectInfo = null;
-                using (var reader = await objCmd.ExecuteReaderAsync())
-                {
-                    if (await reader.ReadAsync())
-                    {
-                        objectInfo = new Dictionary<string, object>
-                        {
-                            ["object_name"] = reader["object_name"],
-                            ["schema_name"] = reader["schema_name"],
-                            ["object_type"] = reader["object_type"],
-                            ["create_date"] = reader["create_date"],
-                            ["modify_date"] = reader["modify_date"],
-                            ["definition"] = reader["definition"] is DBNull ? "Definition not available (may be encrypted)" : reader["definition"]
-                        };
-                    }
-                }
-
-                // Get parameters (for procedures and functions)
-                var parameters = new List<Dictionary<string, object>>();
-                if (detectedType.Contains("PROCEDURE") || detectedType.Contains("FUNCTION"))
-                {
-                    var parametersQuery = @"
-                        SELECT
-                            p.name AS parameter_name,
-                            t.name AS data_type,
-                            p.max_length,
-                            p.precision,
-                            p.scale,
-                            p.is_output,
-                            p.has_default_value,
-                            p.default_value
-                        FROM sys.parameters p
-                        INNER JOIN sys.types t ON p.user_type_id = t.user_type_id
-                        INNER JOIN sys.objects o ON p.object_id = o.object_id
-                        INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
-                        WHERE o.name = @objectName AND s.name = @schemaName
-                        ORDER BY p.parameter_id";
-
-                    using var paramsCmd = new SqlCommand(parametersQuery, connection)
-                    {
-                        CommandTimeout = SqlConnectionManager.CommandTimeout
-                    };
-                    paramsCmd.Parameters.AddWithValue("@objectName", objectName);
-                    paramsCmd.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-
-                    using (var reader = await paramsCmd.ExecuteReaderAsync())
-                    {
-                        while (await reader.ReadAsync())
-                        {
-                            var param = new Dictionary<string, object>
-                            {
-                                ["parameter_name"] = reader["parameter_name"] ?? "",
-                                ["data_type"] = reader["data_type"] ?? "",
-                                ["max_length"] = reader["max_length"] ?? 0,
-                                ["precision"] = reader["precision"] ?? 0,
-                                ["scale"] = reader["scale"] ?? 0,
-                                ["is_output"] = reader["is_output"] ?? false,
-                                ["has_default_value"] = reader["has_default_value"] ?? false,
-                                ["default_value"] = reader["default_value"] is DBNull ? null : reader["default_value"]
-                            };
-                            parameters.Add(param);
-                        }
-                    }
-                }
-
-                // Get columns (for views)
-                var columns = new List<Dictionary<string, object>>();
-                if (detectedType.Contains("VIEW"))
-                {
-                    var columnsQuery = @"
-                        SELECT
-                            c.name AS column_name,
-                            t.name AS data_type,
-                            c.max_length,
-                            c.precision,
-                            c.scale,
-                            c.is_nullable,
-                            c.is_identity,
-                            c.is_computed
-                        FROM sys.columns c
-                        INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
-                        INNER JOIN sys.views v ON c.object_id = v.object_id
-                        INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
-                        WHERE v.name = @objectName AND s.name = @schemaName
-                        ORDER BY c.column_id";
-
-                    using var colsCmd = new SqlCommand(columnsQuery, connection)
-                    {
-                        CommandTimeout = SqlConnectionManager.CommandTimeout
-                    };
-                    colsCmd.Parameters.AddWithValue("@objectName", objectName);
-                    colsCmd.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-
-                    using (var reader = await colsCmd.ExecuteReaderAsync())
-                    {
-                        while (await reader.ReadAsync())
-                        {
-                            var col = new Dictionary<string, object>
-                            {
-                                ["column_name"] = reader["column_name"] ?? "",
-                                ["data_type"] = reader["data_type"] ?? "",
-                                ["max_length"] = reader["max_length"] ?? 0,
-                                ["precision"] = reader["precision"] ?? 0,
-                                ["scale"] = reader["scale"] ?? 0,
-                                ["is_nullable"] = reader["is_nullable"] ?? false,
-                                ["is_identity"] = reader["is_identity"] ?? false,
-                                ["is_computed"] = reader["is_computed"] ?? false
-                            };
-                            columns.Add(col);
-                        }
-                    }
-                }
-
-                // Get dependencies
-                var dependencies = new List<Dictionary<string, object>>();
-                var dependenciesQuery = @"
-                    SELECT DISTINCT
-                        OBJECT_NAME(d.referenced_major_id) AS referenced_object_name,
-                        o.type_desc AS object_type
-                    FROM sys.sql_dependencies d
-                    INNER JOIN sys.objects obj ON d.object_id = obj.object_id
-                    INNER JOIN sys.schemas s ON obj.schema_id = s.schema_id
-                    LEFT JOIN sys.objects o ON d.referenced_major_id = o.object_id
-                    WHERE obj.name = @objectName AND s.name = @schemaName
-                    ORDER BY o.type_desc, OBJECT_NAME(d.referenced_major_id)";
-
-                using var depsCmd = new SqlCommand(dependenciesQuery, connection)
-                {
-                    CommandTimeout = SqlConnectionManager.CommandTimeout
-                };
-                depsCmd.Parameters.AddWithValue("@objectName", objectName);
-                depsCmd.Parameters.AddWithValue("@schemaName", schemaName ?? "dbo");
-
-                using (var reader = await depsCmd.ExecuteReaderAsync())
-                {
-                    while (await reader.ReadAsync())
-                    {
-                        var dep = new Dictionary<string, object>
-                        {
-                            ["referenced_object_name"] = reader["referenced_object_name"] is DBNull ? null : reader["referenced_object_name"],
-                            ["object_type"] = reader["object_type"] is DBNull ? "UNKNOWN" : reader["object_type"]
-                        };
-                        dependencies.Add(dep);
-                    }
-                }
-
-                // Build response based on object type
-                var payload = new Dictionary<string, object>
-                {
-                    ["server_name"] = SqlConnectionManager.ServerName,
-                    ["environment"] = SqlConnectionManager.Environment,
-                    ["database"] = SqlConnectionManager.CurrentDatabase,
-                    ["object_info"] = objectInfo,
-                    ["dependency_count"] = dependencies.Count,
-                    ["dependencies"] = dependencies,
-                    ["security_mode"] = "READ_ONLY"
+                    ["dependency_count"] = definition.Dependencies.Count,
+                    ["parameter_count"] = IsProcedureOrFunction(definition.DetectedType) ? definition.Parameters.Count : 0,
+                    ["column_count"] = IsView(definition.DetectedType) ? definition.Columns.Count : 0
                 };
 
-                if (detectedType.Contains("PROCEDURE") || detectedType.Contains("FUNCTION"))
-                {
-                    payload["parameter_count"] = parameters.Count;
-                    payload["parameters"] = parameters;
-                }
-
-                if (detectedType.Contains("VIEW"))
-                {
-                    payload["column_count"] = columns.Count;
-                    payload["columns"] = columns;
-                }
-
+                var payload = ResponseFormatter.CreateStandardResponse("GetObjectDefinition", payloadData, sw.ElapsedMilliseconds, metadata: metadata);
                 sw.Stop();
                 LoggingHelper.LogEnd(corr, "GetObjectDefinition", true, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(payload);
@@ -996,6 +785,384 @@ namespace SqlServerMcpServer.Operations
                 var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
                 return ResponseFormatter.ToJson(response);
             }
+        }
+
+        /// <summary>
+        /// Get definitions for multiple database objects (procedures, functions, or views) in a single call
+        /// </summary>
+        /// <param name="objectNames">Comma- or newline-separated list of database object names</param>
+        /// <param name="schemaName">Default schema name when not provided (defaults to 'dbo')</param>
+        /// <param name="objectType">Object type filter: 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' to auto-detect (default)</param>
+        /// <param name="maxObjects">Maximum number of objects to process (default: 10, max: 25)</param>
+        /// <returns>Object definitions as JSON string</returns>
+        [McpServerTool, Description("Get definitions for multiple database objects (procedures, functions, or views) in a single call")]
+        public static async Task<string> GetObjectDefinitionsAsync(
+            [Description("Comma- or newline-separated list of database object names")] string objectNames,
+            [Description("Default schema name when not provided (defaults to 'dbo')")] string? schemaName = "dbo",
+            [Description("Object type filter: 'PROCEDURE', 'FUNCTION', 'VIEW', or 'AUTO' to auto-detect (default)")] string? objectType = "AUTO",
+            [Description("Maximum number of objects to process (default: 10, max: 25)")] int maxObjects = 10)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var corr = LoggingHelper.LogStart("GetObjectDefinitions", $"input_length:{objectNames?.Length ?? 0}, schema:{schemaName}, type:{objectType}, max:{maxObjects}");
+            try
+            {
+                if (string.IsNullOrWhiteSpace(objectNames))
+                {
+                    sw.Stop();
+                    var context = new ErrorContext(ErrorCode.InvalidParameter, "At least one object name is required", "GetObjectDefinitions");
+                    LoggingHelper.LogEnd(corr, "GetObjectDefinitions", false, sw.ElapsedMilliseconds, "Missing object names");
+                    return ResponseFormatter.ToJson(ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds));
+                }
+
+                var requestedObjects = objectNames
+                    .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(n => n.Trim())
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (requestedObjects.Count == 0)
+                {
+                    sw.Stop();
+                    var context = new ErrorContext(ErrorCode.InvalidParameter, "At least one object name is required", "GetObjectDefinitions");
+                    LoggingHelper.LogEnd(corr, "GetObjectDefinitions", false, sw.ElapsedMilliseconds, "Missing object names after parsing");
+                    return ResponseFormatter.ToJson(ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds));
+                }
+
+                var maxAllowed = Math.Min(Math.Max(maxObjects, 1), 25);
+                var warnings = new List<string>();
+                if (requestedObjects.Count > maxAllowed)
+                {
+                    warnings.Add($"Requested {requestedObjects.Count} objects; processing the first {maxAllowed} due to max_objects limit.");
+                    requestedObjects = requestedObjects.Take(maxAllowed).ToList();
+                }
+
+                using var connection = SqlConnectionManager.CreateConnection();
+                await connection.OpenAsync();
+
+                var results = new List<Dictionary<string, object>>();
+                var notFound = new List<string>();
+
+                foreach (var rawName in requestedObjects)
+                {
+                    var parsed = ParseObjectName(rawName, schemaName);
+                    var definition = await LoadObjectDefinitionAsync(connection, parsed.objectName, parsed.schemaName, objectType);
+                    if (definition is null)
+                    {
+                        notFound.Add($"{parsed.schemaName}.{parsed.objectName}");
+                        results.Add(new Dictionary<string, object>
+                        {
+                            ["schema_name"] = parsed.schemaName,
+                            ["object_name"] = parsed.objectName,
+                            ["status"] = "NOT_FOUND",
+                            ["message"] = $"Object '{parsed.schemaName}.{parsed.objectName}' not found"
+                        });
+                        continue;
+                    }
+
+                    var payload = BuildObjectDefinitionPayload(definition);
+                    payload["status"] = "OK";
+                    results.Add(payload);
+                }
+
+                if (results.All(r => r.TryGetValue("status", out var status) && string.Equals(status?.ToString(), "NOT_FOUND", StringComparison.OrdinalIgnoreCase)))
+                {
+                    sw.Stop();
+                    var context = new ErrorContext(ErrorCode.InvalidObject, "No matching objects were found for the provided names", "GetObjectDefinitions");
+                    LoggingHelper.LogEnd(corr, "GetObjectDefinitions", false, sw.ElapsedMilliseconds, "No objects found");
+                    return ResponseFormatter.ToJson(ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds));
+                }
+
+                var data = new
+                {
+                    default_schema = schemaName ?? "dbo",
+                    object_type = objectType ?? "AUTO",
+                    requested_count = objectNames
+                        .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Count(n => !string.IsNullOrWhiteSpace(n)),
+                    processed_count = results.Count,
+                    not_found = notFound,
+                    objects = results
+                };
+
+                var metadata = new Dictionary<string, object>
+                {
+                    ["processed_count"] = results.Count,
+                    ["not_found_count"] = notFound.Count
+                };
+
+                var payloadResponse = ResponseFormatter.CreateStandardResponse("GetObjectDefinitions", data, sw.ElapsedMilliseconds, warnings, metadata: metadata);
+                sw.Stop();
+                LoggingHelper.LogEnd(corr, "GetObjectDefinitions", true, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(payloadResponse);
+            }
+            catch (SqlException sqlEx)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromSqlException(sqlEx, "GetObjectDefinitions");
+                LoggingHelper.LogEnd(Guid.Empty, "GetObjectDefinitions", false, sw.ElapsedMilliseconds, sqlEx.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                var context = ErrorHelper.CreateErrorContextFromException(ex, "GetObjectDefinitions");
+                LoggingHelper.LogEnd(Guid.Empty, "GetObjectDefinitions", false, sw.ElapsedMilliseconds, ex.Message);
+                var response = ResponseFormatter.CreateErrorContextResponse(context, sw.ElapsedMilliseconds);
+                return ResponseFormatter.ToJson(response);
+            }
+        }
+
+        private sealed record ObjectDefinitionResult(
+            string DetectedType,
+            Dictionary<string, object> ObjectInfo,
+            List<Dictionary<string, object>> Parameters,
+            List<Dictionary<string, object>> Columns,
+            List<Dictionary<string, object>> Dependencies);
+
+        private static Dictionary<string, object> BuildObjectDefinitionPayload(ObjectDefinitionResult definition)
+        {
+            var payload = new Dictionary<string, object>
+            {
+                ["object_info"] = definition.ObjectInfo,
+                ["dependency_count"] = definition.Dependencies.Count,
+                ["dependencies"] = definition.Dependencies,
+                ["detected_type"] = definition.DetectedType
+            };
+
+            if (IsProcedureOrFunction(definition.DetectedType))
+            {
+                payload["parameter_count"] = definition.Parameters.Count;
+                payload["parameters"] = definition.Parameters;
+            }
+
+            if (IsView(definition.DetectedType))
+            {
+                payload["column_count"] = definition.Columns.Count;
+                payload["columns"] = definition.Columns;
+            }
+
+            return payload;
+        }
+
+        private static async Task<ObjectDefinitionResult?> LoadObjectDefinitionAsync(SqlConnection connection, string objectName, string schemaName, string? objectType)
+        {
+            var resolvedSchema = string.IsNullOrWhiteSpace(schemaName) ? "dbo" : schemaName;
+            string? detectedType;
+
+            if (string.IsNullOrWhiteSpace(objectType) || objectType.ToUpperInvariant() == "AUTO")
+            {
+                var typeQuery = @"
+                    SELECT o.type_desc
+                    FROM sys.objects o
+                    INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+                    WHERE o.name = @objectName AND s.name = @schemaName";
+
+                using var typeCmd = new SqlCommand(typeQuery, connection)
+                {
+                    CommandTimeout = SqlConnectionManager.CommandTimeout
+                };
+                typeCmd.Parameters.AddWithValue("@objectName", objectName);
+                typeCmd.Parameters.AddWithValue("@schemaName", resolvedSchema);
+
+                var result = await typeCmd.ExecuteScalarAsync();
+                detectedType = result?.ToString();
+
+                if (detectedType == null)
+                {
+                    return null;
+                }
+            }
+            else
+            {
+                detectedType = objectType.ToUpperInvariant();
+            }
+
+            var objectInfoQuery = @"
+                SELECT
+                    o.name AS object_name,
+                    s.name AS schema_name,
+                    o.type_desc AS object_type,
+                    o.create_date,
+                    o.modify_date,
+                    OBJECT_DEFINITION(o.object_id) AS definition
+                FROM sys.objects o
+                INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+                WHERE o.name = @objectName AND s.name = @schemaName";
+
+            using var objCmd = new SqlCommand(objectInfoQuery, connection)
+            {
+                CommandTimeout = SqlConnectionManager.CommandTimeout
+            };
+            objCmd.Parameters.AddWithValue("@objectName", objectName);
+            objCmd.Parameters.AddWithValue("@schemaName", resolvedSchema);
+
+            Dictionary<string, object>? objectInfo = null;
+            using (var reader = await objCmd.ExecuteReaderAsync())
+            {
+                if (await reader.ReadAsync())
+                {
+                    objectInfo = new Dictionary<string, object>
+                    {
+                        ["object_name"] = reader["object_name"],
+                        ["schema_name"] = reader["schema_name"],
+                        ["object_type"] = reader["object_type"],
+                        ["create_date"] = reader["create_date"],
+                        ["modify_date"] = reader["modify_date"],
+                        ["definition"] = reader["definition"] is DBNull ? "Definition not available (may be encrypted)" : reader["definition"]
+                    };
+                }
+            }
+
+            if (objectInfo is null)
+            {
+                return null;
+            }
+
+            var parameters = new List<Dictionary<string, object>>();
+            if (IsProcedureOrFunction(detectedType))
+            {
+                var parametersQuery = @"
+                    SELECT
+                        p.name AS parameter_name,
+                        t.name AS data_type,
+                        p.max_length,
+                        p.precision,
+                        p.scale,
+                        p.is_output,
+                        p.has_default_value,
+                        p.default_value
+                    FROM sys.parameters p
+                    INNER JOIN sys.types t ON p.user_type_id = t.user_type_id
+                    INNER JOIN sys.objects o ON p.object_id = o.object_id
+                    INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
+                    WHERE o.name = @objectName AND s.name = @schemaName
+                    ORDER BY p.parameter_id";
+
+                using var paramsCmd = new SqlCommand(parametersQuery, connection)
+                {
+                    CommandTimeout = SqlConnectionManager.CommandTimeout
+                };
+                paramsCmd.Parameters.AddWithValue("@objectName", objectName);
+                paramsCmd.Parameters.AddWithValue("@schemaName", resolvedSchema);
+
+                using (var reader = await paramsCmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var param = new Dictionary<string, object>
+                        {
+                            ["parameter_name"] = reader["parameter_name"] ?? "",
+                            ["data_type"] = reader["data_type"] ?? "",
+                            ["max_length"] = reader["max_length"] ?? 0,
+                            ["precision"] = reader["precision"] ?? 0,
+                            ["scale"] = reader["scale"] ?? 0,
+                            ["is_output"] = reader["is_output"] ?? false,
+                            ["has_default_value"] = reader["has_default_value"] ?? false,
+                            ["default_value"] = reader["default_value"] is DBNull ? null : reader["default_value"]
+                        };
+                        parameters.Add(param);
+                    }
+                }
+            }
+
+            var columns = new List<Dictionary<string, object>>();
+            if (IsView(detectedType))
+            {
+                var columnsQuery = @"
+                    SELECT
+                        c.name AS column_name,
+                        t.name AS data_type,
+                        c.max_length,
+                        c.precision,
+                        c.scale,
+                        c.is_nullable,
+                        c.is_identity,
+                        c.is_computed
+                    FROM sys.columns c
+                    INNER JOIN sys.types t ON c.user_type_id = t.user_type_id
+                    INNER JOIN sys.views v ON c.object_id = v.object_id
+                    INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
+                    WHERE v.name = @objectName AND s.name = @schemaName
+                    ORDER BY c.column_id";
+
+                using var colsCmd = new SqlCommand(columnsQuery, connection)
+                {
+                    CommandTimeout = SqlConnectionManager.CommandTimeout
+                };
+                colsCmd.Parameters.AddWithValue("@objectName", objectName);
+                colsCmd.Parameters.AddWithValue("@schemaName", resolvedSchema);
+
+                using (var reader = await colsCmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var col = new Dictionary<string, object>
+                        {
+                            ["column_name"] = reader["column_name"] ?? "",
+                            ["data_type"] = reader["data_type"] ?? "",
+                            ["max_length"] = reader["max_length"] ?? 0,
+                            ["precision"] = reader["precision"] ?? 0,
+                            ["scale"] = reader["scale"] ?? 0,
+                            ["is_nullable"] = reader["is_nullable"] ?? false,
+                            ["is_identity"] = reader["is_identity"] ?? false,
+                            ["is_computed"] = reader["is_computed"] ?? false
+                        };
+                        columns.Add(col);
+                    }
+                }
+            }
+
+            var dependencies = new List<Dictionary<string, object>>();
+            var dependenciesQuery = @"
+                SELECT DISTINCT
+                    OBJECT_NAME(d.referenced_major_id) AS referenced_object_name,
+                    o.type_desc AS object_type
+                FROM sys.sql_dependencies d
+                INNER JOIN sys.objects obj ON d.object_id = obj.object_id
+                INNER JOIN sys.schemas s ON obj.schema_id = s.schema_id
+                LEFT JOIN sys.objects o ON d.referenced_major_id = o.object_id
+                WHERE obj.name = @objectName AND s.name = @schemaName
+                ORDER BY o.type_desc, OBJECT_NAME(d.referenced_major_id)";
+
+            using var depsCmd = new SqlCommand(dependenciesQuery, connection)
+            {
+                CommandTimeout = SqlConnectionManager.CommandTimeout
+            };
+            depsCmd.Parameters.AddWithValue("@objectName", objectName);
+            depsCmd.Parameters.AddWithValue("@schemaName", resolvedSchema);
+
+            using (var reader = await depsCmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    var dep = new Dictionary<string, object>
+                    {
+                        ["referenced_object_name"] = reader["referenced_object_name"] is DBNull ? null : reader["referenced_object_name"],
+                        ["object_type"] = reader["object_type"] is DBNull ? "UNKNOWN" : reader["object_type"]
+                    };
+                    dependencies.Add(dep);
+                }
+            }
+
+            return new ObjectDefinitionResult(detectedType, objectInfo, parameters, columns, dependencies);
+        }
+
+        private static bool IsProcedureOrFunction(string detectedType) =>
+            detectedType.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase) ||
+            detectedType.Contains("FUNCTION", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsView(string detectedType) =>
+            detectedType.Contains("VIEW", StringComparison.OrdinalIgnoreCase);
+
+        private static (string schemaName, string objectName) ParseObjectName(string input, string? defaultSchema)
+        {
+            var trimmed = input.Trim();
+            var parts = trimmed.Split('.', StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length == 2
+                ? (parts[0], parts[1])
+                : (string.IsNullOrWhiteSpace(defaultSchema) ? "dbo" : defaultSchema, trimmed);
         }
     }
 }
