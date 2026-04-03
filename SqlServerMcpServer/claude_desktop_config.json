@@ -1,10 +1,13 @@
 {
   "mcpServers": {
     "sqlserver": {
-      "command": "c:\\Users\\vgovind\\source\\repos\\net-mcp-sqlserver\\net-mcp-sqlserver\\SqlServerMcpServer\\publish\\SqlServerMcpServer.exe",
+      "command": "/absolute/path/to/publish/SqlServerMcpServer",
       "args": [],
       "env": {
-        "SQLSERVER_CONNECTION_STRING": "Server=localhost;Database=YourDatabase;User Id=your_username;Password=your_password;TrustServerCertificate=true;"
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=master;User Id=sa;Password=Your_Str0ng_Pass!;TrustServerCertificate=true;",
+
+        "SQLSERVER_CONN_PROD":      "Server=prod-sql-01.company.com;Database=production;User Id=app_user;Password=ProdPass!;TrustServerCertificate=true;",
+        "SQLSERVER_CONN_REPORTING": "Server=report-sql-01.company.com;Database=analytics;User Id=report_user;Password=ReportPass!;TrustServerCertificate=true;"
       }
     }
   }
