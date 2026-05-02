@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "dotnet",
+      "args": ["run", "--project", "/absolute/path/to/SqlServerMcpServer"],
+      "env": {
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "GetConnections",
+        "SwitchConnection",
+        "GetServerHealth",
+        "GetCurrentDatabase",
+        "GetDatabases",
+        "GetTables",
+        "GetTableSchema",
+        "GetStoredProcedures"
+      ]
+    }
+  }
+}

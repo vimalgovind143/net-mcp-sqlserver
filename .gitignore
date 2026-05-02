@@ -379,3 +379,5 @@ appsettings*.json
 
 
 .docs
+
+.dotnet-home

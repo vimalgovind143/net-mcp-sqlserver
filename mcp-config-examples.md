@@ -4,6 +4,7 @@ Sample configuration files for connecting this SQL Server MCP Server to various 
 
 > **Single-instance users:** Nothing changes — the examples below are fully backward compatible.  
 > **Multi-instance users:** Add `SQLSERVER_CONN_<NAME>` env vars for each additional server.
+> **Docker deployment:** See `config-samples/` directory for ready-to-use config files.
 
 ---
 
@@ -172,6 +173,8 @@ Sample configuration files for connecting this SQL Server MCP Server to various 
 | `SQLSERVER_COMMAND_TIMEOUT` | Query timeout in seconds (default: 30) | `60` |
 | `MCP_SERVER_NAME` | Display name in responses | `"My SQL MCP"` |
 | `MCP_ENVIRONMENT` | Environment label in responses | `"production"` |
+| `MCP_TRANSPORT` | Transport mode: `stdio`, `tcp`, `http`, `sse` | `"sse"` |
+| `MCP_PORT` | Port for TCP/SSE transport (default: 8080) | `8080` |
 
 ---
 
@@ -212,4 +215,172 @@ Assistant: [calls SwitchConnection("prod")]
 You:       "Run SELECT TOP 5 * FROM Orders against prod while I work on default"
 Assistant: [calls SwitchConnection("default")]
            [calls ExecuteQuery("SELECT TOP 5 * FROM Orders", connectionName: "prod")]
+
+---
+
+## Transport Modes
+
+The server supports three transport modes, selected via `MCP_TRANSPORT`:
+
+| Mode | Value | Description |
+|------|-------|-------------|
+| **Stdio** | `stdio` (default) | Stdin/stdout — standard local process transport |
+| **TCP** | `tcp` | Raw TCP socket on `MCP_PORT` (one client at a time) |
+| **SSE** | `sse` or `http` | HTTP SSE transport on `MCP_PORT` — endpoints: `GET /sse`, `POST /message`, `GET /health` |
+
+---
+
+## Docker Deployment
+
+### Build
+
+```bash
+docker build -t sqlserver-mcp .
+```
+
+### Run
+
+```bash
+docker run -d \
+  --name sqlserver-mcp \
+  -p 8080:8080 \
+  -e SQLSERVER_CONNECTION_STRING="Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;" \
+  -e MCP_TRANSPORT=sse \
+  sqlserver-mcp
+```
+
+### Docker Compose
+
+Create a `.env` file:
+
+```env
+SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;
+MCP_TRANSPORT=sse
+MCP_PORT=8080
+```
+
+Then run:
+
+```bash
+docker compose up -d
+```
+
+Check health:
+
+```bash
+curl http://localhost:8080/health
+# → {"status":"healthy","transport":"sse"}
+```
+
+---
+
+## SSE Transport — Client Configuration
+
+The SSE transport supports **multiple concurrent sessions** via session IDs.
+
+### How it works
+
+1. Client connects `GET /sse` → receives `event: endpoint` with session-specific URL  
+2. Client POSTs JSON-RPC to `/message?sessionId=<id>`  
+3. Server streams responses as SSE events on the open `/sse` connection
+
+### VS Code (`.vscode/mcp.json`) — SSE transport
+
+```json
+{
+  "servers": {
+    "sqlserver": {
+      "type": "sse",
+      "url": "http://localhost:9090/sse"
+    }
+  }
+}
+```
+
+### Kilo (`.kilo/kilo.jsonc`) — SSE (remote) transport
+
+```jsonc
+{
+  "mcp": {
+    "sqlserver": {
+      "type": "remote",
+      "url": "http://localhost:9090/sse",
+      "enabled": true,
+      "timeout": 60000
+    }
+  },
+  "permission": {
+    "sqlserver_*": "allow"
+  }
+}
+```
+
+### Cursor / Windsurf — SSE transport
+
+```json
+{
+  "mcpServers": {
+    "sqlserver": {
+      "type": "sse",
+      "url": "http://localhost:9090/sse"
+    }
+  }
+}
+```
+
+> **Note:** Claude Desktop only supports `stdio` transport at this time.
+
+### Docker via Stdio (Claude Desktop / any stdio client)
+
+```json
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e", "SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;",
+        "-e", "MCP_TRANSPORT=stdio",
+        "sqlserver-mcp"
+      ]
+    }
+  }
+}
+```
+
+---
+
+## TCP Transport — Client Configuration
+
+For clients that support raw TCP (or via a TCP→stdio proxy):
+
+```bash
+# Run the server in TCP mode
+docker run -d \
+  --name sqlserver-mcp \
+  -p 9090:8080 \
+  -e SQLSERVER_CONNECTION_STRING="Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;" \
+  -e MCP_TRANSPORT=tcp \
+  -e MCP_PORT=8080 \
+  sqlserver-mcp
+```
+
+Then connect via `localhost:9090`.
+
+---
+
+## Building for a Specific Platform
+
+```bash
+# Linux x64 (default for Docker)
+dotnet publish -c Release -r linux-x64 -o publish/
+
+# Linux ARM64
+dotnet publish -c Release -r linux-arm64 -o publish/
+
+# Windows x64
+dotnet publish -c Release -r win-x64 -o publish/
+```
 ```
