@@ -30,7 +30,8 @@ namespace SqlServerMcpServer.Operations
             [Description("Offset for pagination (default: 0)")] int? offset = 0,
             [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
             [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false,
-            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false)
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false,
+            [Description("Named connection to use (defaults to active connection)")] string? connectionName = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -57,7 +58,7 @@ namespace SqlServerMcpServer.Operations
                 // Generate query warnings
                 var warnings = QueryValidator.GenerateQueryWarnings(query, effectiveOffset);
 
-                using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync();
+                using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync(connectionName);
 
                 // Enable statistics if requested
                 if (includeStatistics)
@@ -280,7 +281,8 @@ namespace SqlServerMcpServer.Operations
             [Description("Result format: json | csv | table (HTML)")] string? format = "json",
             [Description("Named parameters to bind (e.g., { id: 42 })")] Dictionary<string, object>? parameters = null,
             [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null,
-            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirm_unsafe_operation = false)
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirm_unsafe_operation = false,
+            [Description("Named connection to use (defaults to active connection)")] string? connectionName = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -338,7 +340,7 @@ namespace SqlServerMcpServer.Operations
                     ? QueryFormatter.ApplyTopLimit(query, appliedMaxRows) 
                     : query;
 
-                using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync();
+                using var connection = await ConnectionPoolManager.CreateConnectionWithRetryAsync(connectionName);
 
                 // Generate warnings for all query types
                 var queryWarnings = QueryValidator.GenerateQueryWarnings(query);

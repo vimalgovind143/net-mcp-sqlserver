@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "MCP_TRANSPORT=stdio",
+        "-e", "SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=True;",
+        "sqlserver-mcp"
+      ]
+    }
+  }
+}

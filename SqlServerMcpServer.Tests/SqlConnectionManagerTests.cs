@@ -97,10 +97,9 @@ namespace SqlServerMcpServer.Tests
             var newConnectionString = SqlConnectionManager.CreateConnectionStringForDatabase("");
 
             // Assert
-            // The connection string builder will set Initial Catalog to empty string
-            // which changes connection string format, so we'll just verify it's not null
+            // Empty name is treated as "no change" — returns the current connection string unchanged
             Assert.NotNull(newConnectionString);
-            Assert.NotEqual(originalConnectionString, newConnectionString);
+            Assert.Equal(originalConnectionString, newConnectionString);
         }
 
         [Fact]

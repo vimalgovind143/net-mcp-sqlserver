@@ -1,0 +1,45 @@
+# Build artifacts
+**/bin/
+**/obj/
+**/publish/
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Tests
+**/TestResults/
+**/*.Tests/
+
+# Docs (not needed at runtime)
+*.md
+!README.md
+plan/
+
+# Logs
+**/logs/
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# OS noise
+Thumbs.db
+.DS_Store
+*.swp
+*~

@@ -158,16 +158,166 @@ dotnet run
 
 The server will start and listen for MCP protocol messages via stdio.
 
-## Integration with Claude Desktop
+## Docker Deployment
 
-1. Copy the `claude_desktop_config.json` file to your Claude Desktop configuration directory
-2. Update the connection string in the config file to match your database
-3. Restart Claude Desktop
+The project includes a multi-stage `Dockerfile` and `docker-compose.yml` for containerized deployment.
 
-The configuration file should be placed at:
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Linux**: `~/.config/claude/claude_desktop_config.json`
+### Build
+
+```bash
+docker build -t sqlserver-mcp .
+```
+
+### Run (SSE mode — default in Docker)
+
+```bash
+docker run -d --name sqlserver-mcp -p 9090:8080 \
+  -e MCP_TRANSPORT=sse \
+  -e SQLSERVER_CONNECTION_STRING="Server=your_server,1433;Database=your_db;User Id=sa;Password=YourPass!;TrustServerCertificate=True;" \
+  sqlserver-mcp
+```
+
+### Run (Stdio mode — for Docker-aware MCP clients)
+
+```bash
+docker run -i --rm \
+  -e MCP_TRANSPORT=stdio \
+  -e SQLSERVER_CONNECTION_STRING="Server=your_server,1433;Database=your_db;User Id=sa;Password=YourPass!;TrustServerCertificate=True;" \
+  sqlserver-mcp
+```
+
+### Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  mcp-server:
+    build: .
+    ports:
+      - "9090:8080"
+    environment:
+      MCP_TRANSPORT: sse
+      SQLSERVER_CONNECTION_STRING: "Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=True;"
+```
+
+```bash
+docker compose up -d
+```
+
+### Verify
+
+```bash
+curl http://localhost:9090/health
+# → {"status":"healthy","transport":"sse","sessions":0}
+```
+
+## Transport Modes
+
+The server supports three transport modes, selected via `MCP_TRANSPORT` environment variable:
+
+| Mode | Value | Description | Port |
+|------|-------|-------------|------|
+| **Stdio** | `stdio` (default) | Standard stdin/stdout — local process | N/A |
+| **SSE** | `sse` / `http` | HTTP Server-Sent Events — multi-session | `MCP_PORT` (8080) |
+| **TCP** | `tcp` | Raw TCP socket — single client | `MCP_PORT` (8080) |
+
+### SSE Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/sse` | Establish SSE connection (returns session ID via `endpoint` event) |
+| `POST` | `/message?sessionId=<id>` | Send JSON-RPC messages for a session |
+| `GET` | `/health` | Health check (returns session count) |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio`, `sse`, `http`, `tcp` |
+| `MCP_PORT` | `8080` | Port for TCP/SSE modes |
+| `MCP_SERVER_NAME` | `SQL Server MCP` | Display name in responses |
+| `MCP_ENVIRONMENT` | `unknown` | Environment label in responses |
+| `SQLSERVER_CONNECTION_STRING` | localhost fallback | Database connection string |
+| `SQLSERVER_COMMAND_TIMEOUT` | `30` | Query timeout in seconds |
+| `CACHE_TTL_METADATA_SECONDS` | `300` | Metadata cache TTL |
+| `CACHE_TTL_SCHEMA_SECONDS` | `600` | Schema cache TTL |
+| `CACHE_TTL_PROCEDURE_SECONDS` | `300` | Procedure cache TTL |
+
+## Integration with AI Agents
+
+Config files for each client are in the `config-samples/` directory and pre-configured in the project:
+
+### Kilo (`.kilo/kilo.jsonc`)
+
+```jsonc
+{
+  "mcp": {
+    "sqlserver": {
+      "type": "remote",
+      "url": "http://localhost:9090/sse",
+      "enabled": true,
+      "timeout": 60000
+    }
+  },
+  "permission": {
+    "sqlserver_*": "allow"
+  }
+}
+```
+
+### VS Code (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "sqlserver-sse": {
+      "type": "sse",
+      "url": "http://localhost:9090/sse"
+    }
+  }
+}
+```
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+```json
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "MCP_TRANSPORT=stdio",
+        "-e", "SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=True;",
+        "sqlserver-mcp"
+      ]
+    }
+  }
+}
+```
+
+### Cursor / Windsurf
+
+```json
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "dotnet",
+      "args": ["run", "--project", "SqlServerMcpServer"],
+      "env": {
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;"
+      },
+      "autoApprove": [
+        "GetConnections", "SwitchConnection", "GetServerHealth",
+        "GetCurrentDatabase", "GetDatabases", "GetTables",
+        "GetTableSchema", "GetStoredProcedures"
+      ]
+    }
+  }
+}
+```
+
+Configuration examples for all clients are in `mcp-config-examples.md`.
 
 ## Available Tools
 

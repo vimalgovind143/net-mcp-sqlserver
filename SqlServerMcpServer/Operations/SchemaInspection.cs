@@ -26,13 +26,14 @@ namespace SqlServerMcpServer.Operations
             [Description("Filter by table name (partial match, optional)")] string? nameFilter = null,
             [Description("Minimum row count filter (optional)")] int? minRowCount = null,
             [Description("Sort by: 'NAME', 'SIZE', or 'ROWS' (default: 'NAME')")] string? sortBy = "NAME",
-            [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC")
+            [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC",
+            [Description("Named connection to use (defaults to active connection)")] string? connectionName = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var corr = LoggingHelper.LogStart("GetTables", $"schema:{schemaFilter}, name:{nameFilter}, minRows:{minRowCount}, sort:{sortBy} {sortOrder}");
-                using var connection = SqlConnectionManager.CreateConnection();
+                var corr = LoggingHelper.LogStart("GetTables", $"schema:{schemaFilter}, name:{nameFilter}, minRows:{minRowCount}, sort:{sortBy} {sortOrder}, conn:{connectionName ?? "active"}");
+                using var connection = SqlConnectionManager.CreateConnection(connectionName);
                 await connection.OpenAsync();
 
                 // Validate sort parameters
