@@ -1,5 +1,6 @@
 using FluentAssertions;
 using SqlServerMcpServer.Utilities;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace SqlServerMcpServer.Tests
@@ -194,6 +195,68 @@ namespace SqlServerMcpServer.Tests
 
             // Assert
             result.Should().Be(query);
+        }
+
+        [Fact]
+        public void ApplyTopLimit_WithSubquery_OnlyLimitsOuterSelect()
+        {
+            // Arrange - inner subquery SELECT must NOT receive a TOP clause
+            var query = "SELECT * FROM Orders WHERE CustomerId IN (SELECT CustomerId FROM Customers WHERE Region = 'X')";
+            var maxRows = 100;
+
+            // Act
+            var result = QueryFormatter.ApplyTopLimit(query, maxRows);
+
+            // Assert
+            result.Should().Be("SELECT TOP 100 * FROM Orders WHERE CustomerId IN (SELECT CustomerId FROM Customers WHERE Region = 'X')");
+            // Exactly one TOP should be injected
+            Regex.Matches(result, @"\bTOP\b", RegexOptions.IgnoreCase).Count.Should().Be(1);
+        }
+
+        [Fact]
+        public void ApplyTopLimit_WithUnion_OnlyLimitsFirstSelect()
+        {
+            // Arrange - only the first SELECT in a UNION should get TOP
+            var query = "SELECT 1 UNION SELECT 2 UNION SELECT 3";
+            var maxRows = 100;
+
+            // Act
+            var result = QueryFormatter.ApplyTopLimit(query, maxRows);
+
+            // Assert
+            result.Should().Be("SELECT TOP 100 1 UNION SELECT 2 UNION SELECT 3");
+            Regex.Matches(result, @"\bTOP\b", RegexOptions.IgnoreCase).Count.Should().Be(1);
+        }
+
+        [Fact]
+        public void ApplyTopLimit_WithCte_DoesNotLimitOuterAndInnerTogether()
+        {
+            // Arrange - the CTE inner SELECT is the first SELECT; only it is limited, outer is left alone
+            var query = "WITH c AS (SELECT Id FROM T) SELECT * FROM c";
+            var maxRows = 100;
+
+            // Act
+            var result = QueryFormatter.ApplyTopLimit(query, maxRows);
+
+            // Assert
+            result.Should().Be("WITH c AS (SELECT TOP 100 Id FROM T) SELECT * FROM c");
+            Regex.Matches(result, @"\bTOP\b", RegexOptions.IgnoreCase).Count.Should().Be(1);
+        }
+
+        [Fact]
+        public void ApplyPaginationAndLimit_WithSubquery_OnlyLimitsOuterSelect()
+        {
+            // Arrange
+            var query = "SELECT * FROM Orders WHERE Id IN (SELECT OrderId FROM Items)";
+            var limit = 50;
+            var offset = 0;
+
+            // Act
+            var result = QueryFormatter.ApplyPaginationAndLimit(query, limit, offset);
+
+            // Assert
+            result.Should().Be("SELECT TOP 50 * FROM Orders WHERE Id IN (SELECT OrderId FROM Items)");
+            Regex.Matches(result, @"\bTOP\b", RegexOptions.IgnoreCase).Count.Should().Be(1);
         }
     }
 }

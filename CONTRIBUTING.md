@@ -18,7 +18,7 @@ Thank you for your interest in contributing to the SQL Server MCP Server! This d
 
 ## Welcome & Project Overview
 
-The SQL Server MCP Server is a Model Context Protocol (MCP) server that provides read-only database tools for AI assistants. It's built with .NET 10.0 and the official MCP SDK, offering comprehensive SQL Server interaction capabilities while maintaining strict security through read-only enforcement.
+The SQL Server MCP Server is a Model Context Protocol (MCP) server that provides database tools for AI assistants. It's built with .NET 10.0 and the official MCP SDK, offering comprehensive SQL Server interaction capabilities with a guarded-write security model: SELECT/INSERT/UPDATE run normally, DELETE/TRUNCATE require explicit confirmation, and DDL/administrative statements are always blocked.
 
 For detailed project context, please refer to:
 - [README.md](README.md) - Project overview, setup instructions, and usage examples
@@ -266,21 +266,23 @@ For detailed instructions, see the "Adding a New Tool" section in [AGENTS.md](AG
 
 ## Security Guidelines
 
-### READ-ONLY Enforcement
+### Query Validation & Guarded Writes
 
-This server enforces strict read-only access through `QueryValidator.cs`:
+This server validates user SQL through `QueryValidator.cs` using a guarded-write model:
 
-- **Allowed**: SELECT queries and CTEs (`WITH ... SELECT`)
-- **Blocked**: DDL (CREATE, ALTER, DROP), DML (INSERT, UPDATE, DELETE), EXEC, system commands
-- **Validation**: Comment stripping, normalization, keyword blocking, single-statement enforcement
+- **Allowed**: SELECT, CTEs (`WITH ... SELECT`), INSERT, UPDATE
+- **Requires confirmation** (`confirmUnsafeOperation=true`): DELETE, TRUNCATE
+- **Always blocked**: DDL (CREATE, ALTER, DROP), MERGE, EXEC/EXECUTE, BULK, GRANT/REVOKE/DENY, `SELECT INTO`, system commands, multiple statements
+- **Validation**: Comment stripping, normalization, keyword/classification checks, single-statement enforcement
+- A stricter `IsReadOnlyQuery` validator remains available for paths that must never write (e.g. execution-plan analysis)
 
 ### Security Requirements
 
-- All database operations must be read-only
+- Route user-supplied SQL through the appropriate validator (`IsDmlQueryAllowed` for query tools, `IsReadOnlyQuery` for read-only-only paths)
 - Use parameterized queries to prevent SQL injection
 - Validate all input parameters
 - Never expose connection strings or sensitive data
-- Follow principle of least privilege
+- Follow principle of least privilege — prefer a least-privilege (or read-only) SQL login since the server can modify data
 
 ### Query Validation Flow
 

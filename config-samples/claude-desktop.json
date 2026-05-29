@@ -1,11 +1,24 @@
 {
+  "//": "Claude Desktop config. Windows: %APPDATA%\\Claude\\claude_desktop_config.json  |  macOS: ~/Library/Application Support/Claude/claude_desktop_config.json",
+  "//option-a": "Native .NET (no Docker). Build first with: dotnet build -c Debug (DLL lands under net10.0/win-x64/).",
+  "//option-b": "Docker image 'sqlserver-mcp' built from the repo Dockerfile.",
   "mcpServers": {
     "sqlserver": {
+      "command": "dotnet",
+      "args": [
+        "d:\\GitHub\\net-mcp-sqlserver\\SqlServerMcpServer\\bin\\Debug\\net10.0\\win-x64\\SqlServerMcpServer.dll"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=Optimum_Utilities;User Id=sa;password=YourStrong@Password123;Trusted_Connection=False;MultipleActiveResultSets=true;TrustServerCertificate=True;"
+      }
+    },
+    "sqlserver-docker": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",
         "-e", "MCP_TRANSPORT=stdio",
-        "-e", "SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=True;",
+        "-e", "SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=Optimum_Utilities;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=True;",
         "sqlserver-mcp"
       ]
     }

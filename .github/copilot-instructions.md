@@ -14,9 +14,10 @@
 - When catching exceptions, prefer `CreateStandardErrorResponse` so clients get `security_mode`, `operation`, and troubleshooting hints.
 
 ## SQL Safety & Query Limits
-- `IsReadOnlyQuery` strips comments, blocks multi-statements, and rejects DDL/DML, `SELECT INTO`, `USE`, etc.; every dynamic SQL execution path must pass through it unless the query text is fully hard-coded.
-- `ExecuteQueryAsync` clamps `maxRows`, `pageSize`, and pagination to ≤1000 rows, then routes through `ApplyPaginationAndLimit` to inject `TOP`/`OFFSET` clauses while preserving existing limits—reuse that helper for any result-set tooling.
-- Blocked queries return `BLOCKED_OPERATION` payloads with the original SQL and guidance; match that behavior if you add new validation rules.
+- The query tools (`ExecuteQueryAsync`, `ReadQueryAsync`) validate user SQL through `QueryValidator.IsDmlQueryAllowed`: SELECT/INSERT/UPDATE are allowed, DELETE/TRUNCATE require `confirmUnsafeOperation=true`, and DDL/EXEC/MERGE/BULK/permissions/`SELECT INTO`/multi-statements are always blocked.
+- `QueryValidator.IsReadOnlyQuery` is the stricter SELECT-only validator; use it for paths that must never write (e.g. `PerformanceAnalysis.GetQueryExecutionPlan`). Every dynamic SQL path must pass through one of these validators unless the query text is fully hard-coded.
+- `ExecuteQueryAsync` clamps `maxRows`, `pageSize`, and pagination to ≤1000 rows, then routes SELECTs through `ApplyPaginationAndLimit` to inject `TOP`/`OFFSET` on the **outer** SELECT (subqueries/CTEs/UNION branches untouched) while preserving existing limits—reuse that helper for any result-set tooling.
+- Blocked queries return `BLOCKED_OPERATION` payloads with the original SQL and guidance; DELETE/TRUNCATE without confirmation report `security_mode: DML_WITH_CONFIRMATION`. Match that behavior if you add new validation rules.
 
 ## Response Shape & Metadata
 - Standard success payloads include `server_name`, `environment`, `database`, `operation`, UTC `timestamp`, execution timing, `security_mode`, plus `data`/`metadata` collections—mirror this to keep clients parsable.
@@ -34,6 +35,6 @@
 - No automated tests exist; validate changes against a live SQL Server instance and watch the `logs/` folder for structured Serilog output when debugging.
 
 ## Extending Safely
-- Keep new tools read-only: even metadata lookups should either use hard-coded SQL or run through `IsReadOnlyQuery` before execution.
+- Route any new tool that runs user-supplied SQL through a validator: `IsDmlQueryAllowed` for general query tools, or `IsReadOnlyQuery` for paths that must stay strictly read-only. Hard-coded metadata SQL is also fine.
 - Thread new Serilog context (like database names) through the optional `context` argument on `LogStart` when it aids debugging.
 - Document new tools in `README.md` and ensure their payload schemas follow the established patterns so downstream MCP clients stay compatible.

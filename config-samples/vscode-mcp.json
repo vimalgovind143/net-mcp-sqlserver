@@ -17,8 +17,9 @@
     "sqlserver-dotnet": {
       "type": "stdio",
       "command": "dotnet",
-      "args": ["run", "--project", "SqlServerMcpServer"],
+      "args": ["/absolute/path/to/SqlServerMcpServer/bin/Debug/net10.0/win-x64/SqlServerMcpServer.dll"],
       "env": {
+        "MCP_TRANSPORT": "stdio",
         "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;"
       }
     }

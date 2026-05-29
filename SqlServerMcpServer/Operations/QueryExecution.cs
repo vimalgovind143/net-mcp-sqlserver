@@ -455,7 +455,7 @@ namespace SqlServerMcpServer.Operations
 
                 // Read results
                 var results = new List<Dictionary<string, object>>();
-                while (await reader.ReadAsync())
+                while (await reader.ReadAsync() && results.Count < appliedMaxRows)
                 {
                     var row = new Dictionary<string, object>();
                     for (int i = 0; i < reader.FieldCount; i++)

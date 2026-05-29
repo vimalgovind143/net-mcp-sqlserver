@@ -51,7 +51,8 @@ namespace SqlServerMcpServer.Utilities
                         var modifiedQuery = withoutComments;
                         if (newTop != existing)
                         {
-                            modifiedQuery = Regex.Replace(
+                            // Only modify the FIRST SELECT ... TOP so inner subqueries/CTEs are untouched
+                            modifiedQuery = ReplaceFirst(
                                 withoutComments,
                                 @"(\bSELECT)\s+(DISTINCT\s+)?TOP\s+\d+\b",
                                 m =>
@@ -59,10 +60,7 @@ namespace SqlServerMcpServer.Utilities
                                     var selectKeyword = m.Groups[1].Value; // Preserve original case
                                     var distinct = m.Groups[2].Value;
                                     return $"{selectKeyword} {distinct}TOP {newTop}";
-                                },
-                                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                                TimeSpan.FromMilliseconds(100)
-                            );
+                                });
                         }
                         // If offset > 0, add OFFSET/FETCH after modifying TOP
                         if (offset > 0)
@@ -77,24 +75,12 @@ namespace SqlServerMcpServer.Utilities
                 // Add OFFSET/FETCH for pagination if offset > 0
                 if (offset > 0)
                 {
-                    var withOffset = Regex.Replace(
-                        withoutComments,
-                        @"(\bSELECT)\s+(DISTINCT\s+)?",
-                        m =>
-                        {
-                            var selectKeyword = m.Groups[1].Value; // Preserve original case
-                            var distinct = m.Groups[2].Value;
-                            return $"{selectKeyword} {distinct}";
-                        },
-                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                        TimeSpan.FromMilliseconds(100)
-                    );
-
-                    return $"{withOffset} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY";
+                    // OFFSET/FETCH applies to the whole statement; no need to rewrite SELECT itself
+                    return $"{withoutComments} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY";
                 }
 
-                // No pagination or TOP: insert TOP limit after first SELECT
-                var replaced = Regex.Replace(
+                // No pagination or TOP: insert TOP limit after the FIRST SELECT only
+                var replaced = ReplaceFirst(
                     withoutComments,
                     @"(\bSELECT)\s+(DISTINCT\s+)?",
                     m =>
@@ -102,10 +88,7 @@ namespace SqlServerMcpServer.Utilities
                         var selectKeyword = m.Groups[1].Value; // Preserve original case
                         var distinct = m.Groups[2].Value;
                         return $"{selectKeyword} {distinct}TOP {limit} ";
-                    },
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                    TimeSpan.FromMilliseconds(100)
-                );
+                    });
 
                 return string.IsNullOrWhiteSpace(replaced) ? query : replaced;
             }
@@ -158,7 +141,8 @@ namespace SqlServerMcpServer.Utilities
                         var newTop = Math.Min(existing, maxRows);
                         if (newTop != existing)
                         {
-                            var capped = Regex.Replace(
+                            // Only modify the FIRST SELECT ... TOP so inner subqueries/CTEs are untouched
+                            var capped = ReplaceFirst(
                                 withoutComments,
                                 @"(\bSELECT)\s+(DISTINCT\s+)?TOP\s+\d+\b",
                                 m =>
@@ -166,10 +150,7 @@ namespace SqlServerMcpServer.Utilities
                                     var selectKeyword = m.Groups[1].Value; // Preserve original case
                                     var distinct = m.Groups[2].Value;
                                     return $"{selectKeyword} {distinct}TOP {newTop}";
-                                },
-                                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                                TimeSpan.FromMilliseconds(100)
-                            );
+                                });
                             return string.IsNullOrWhiteSpace(capped) ? query : capped;
                         }
                     }
@@ -179,8 +160,8 @@ namespace SqlServerMcpServer.Utilities
                 // Note: ApplyTopLimit doesn't support offset, only maxRows limit
                 // For offset support, use ApplyPaginationAndLimit method instead
 
-                // No pagination or TOP: insert TOP limit after first SELECT
-                var replaced = Regex.Replace(
+                // No pagination or TOP: insert TOP limit after the FIRST SELECT only
+                var replaced = ReplaceFirst(
                     withoutComments,
                     @"(\bSELECT)\s+(DISTINCT\s+)?",
                     m =>
@@ -188,10 +169,7 @@ namespace SqlServerMcpServer.Utilities
                         var selectKeyword = m.Groups[1].Value; // Preserve original case
                         var distinct = m.Groups[2].Value;
                         return $"{selectKeyword} {distinct}TOP {maxRows} ";
-                    },
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                    TimeSpan.FromMilliseconds(100)
-                );
+                    });
 
                 return string.IsNullOrWhiteSpace(replaced) ? query : replaced;
             }
@@ -199,6 +177,22 @@ namespace SqlServerMcpServer.Utilities
             {
                 return query;
             }
+        }
+
+        /// <summary>
+        /// Replaces only the FIRST match of <paramref name="pattern"/> in <paramref name="input"/>.
+        /// Used so that row limits are applied to the outer SELECT only, leaving subqueries,
+        /// CTE bodies, and UNION branches untouched.
+        /// </summary>
+        private static string ReplaceFirst(string input, string pattern, MatchEvaluator evaluator)
+        {
+            var regex = new Regex(
+                pattern,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(100));
+
+            // count = 1 → replace only the first occurrence
+            return regex.Replace(input, evaluator, 1);
         }
     }
 }

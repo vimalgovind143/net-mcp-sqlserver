@@ -1,0 +1,17 @@
+# OpenAI Codex CLI MCP configuration
+# Location: ~/.codex/config.toml
+# Codex launches MCP servers over stdio. Each [mcp_servers.<name>] block defines one server.
+#
+# Build first:  dotnet build -c Debug
+# The csproj is SelfContained/SingleFile, so the DLL lands under net10.0/win-x64/.
+
+[mcp_servers.sqlserver]
+command = "dotnet"
+args = ["d:/GitHub/net-mcp-sqlserver/SqlServerMcpServer/bin/Debug/net10.0/win-x64/SqlServerMcpServer.dll"]
+
+[mcp_servers.sqlserver.env]
+MCP_TRANSPORT = "stdio"
+MCP_SERVER_NAME = "Optimum SQL (local docker)"
+MCP_ENVIRONMENT = "development"
+SQLSERVER_CONNECTION_STRING = "Server=localhost,1433;Database=Optimum_Utilities;User Id=sa;password=YourStrong@Password123;Trusted_Connection=False;MultipleActiveResultSets=true;TrustServerCertificate=True;"
+SQLSERVER_COMMAND_TIMEOUT = "30"
