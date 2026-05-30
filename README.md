@@ -4,10 +4,10 @@ A Model Context Protocol (MCP) server that provides tools for interacting with M
 
 ## Features
 
-- **🔒 Read-Only Security**: Enforced SELECT-only operations to prevent accidental data modification
+- **🔒 Guarded Write Security**: SELECT and INSERT/UPDATE run normally; DELETE/TRUNCATE require explicit confirmation; DDL and other dangerous operations are always blocked
 - **Dynamic Database Switching**: Switch between databases on the same server without restarting
 - **Database Listing**: View all available databases with current database highlighted
-- **Execute SQL Queries**: Run read-only SQL queries against the current database
+- **Execute SQL Queries**: Run SQL queries against the current database with row limits and metadata
 - **List Tables**: Get all tables in the current database with row counts
 - **Get Table Schema**: Retrieve column information for specific tables
 - **Connection Info**: Display current database connection status
@@ -17,39 +17,48 @@ A Model Context Protocol (MCP) server that provides tools for interacting with M
 - **Health Check**: Verify connectivity and view server properties
 - **Structured Logging**: JSON logs to stderr with correlation IDs and timings
  - **Serilog Integration**: Structured logging via Serilog with JSON formatting
- - **Row Limit Enforcement**: Max 100 rows returned per query
+ - **Row Limit Enforcement**: Returned rows are capped per query (see tool docs for defaults and limits)
 
 ## 🔒 Security Features
 
-This MCP server is designed with **read-only security** to prevent accidental data modification:
+This MCP server uses a **guarded write** model: read queries and routine DML run normally, the most destructive statements require explicit confirmation, and structural/administrative statements are always blocked.
 
-### **Blocked Operations:**
-- ❌ INSERT, UPDATE, DELETE statements
-- ❌ DROP, CREATE, ALTER statements  
-- ❌ TRUNCATE, MERGE operations
+### **Always Blocked Operations:**
+- ❌ DROP, CREATE, ALTER statements
+- ❌ MERGE operations
 - ❌ EXEC/EXECUTE stored procedures
 - ❌ GRANT, REVOKE, DENY permissions
 - ❌ BULK operations
 - ❌ SELECT INTO (object creation)
 - ❌ Multiple statements in a single request
-- ❌ Any non-SELECT statements
- - ❌ USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, sp_configure
+- ❌ USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, sp_configure
 
-### **Allowed Operations:**
+### **Allowed Without Confirmation:**
 - ✅ SELECT queries for data retrieval
+- ✅ INSERT and UPDATE statements
 - ✅ Database listing and switching
 - ✅ Table schema inspection
 - ✅ Connection status queries
 
+### **Allowed Only With Explicit Confirmation:**
+- ⚠️ DELETE statements — require `confirm_unsafe_operation=true`
+- ⚠️ TRUNCATE statements — require `confirm_unsafe_operation=true`
+
+Without the confirmation flag, DELETE/TRUNCATE are rejected and the response reports `security_mode: DML_WITH_CONFIRMATION` along with a confirmation message.
+
+> **Note:** This server can modify data. Point it at databases with an appropriately scoped login, and prefer a read-only or least-privilege SQL account when write access is not required.
+
 ### **Error Messages:**
-When a blocked operation is attempted, the server provides clear, specific error messages:
+When an operation is blocked or needs confirmation, the server provides clear, specific messages:
 ```
-❌ UPDATE operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.
+❌ ALTER operations are not allowed. This MCP server is READ-ONLY and only supports SELECT queries for data viewing.
+⚠️ DELETE operations require user confirmation. Set confirm_unsafe_operation=true to proceed.
 ```
 
 ### **Additional Safety Features:**
 - Query timeout protection (configurable, default 30 seconds)
-- Input validation and sanitization
+- Single-statement enforcement (multiple statements are blocked)
+- Row-limit injection (`TOP`/`OFFSET-FETCH`) applied to the outer SELECT
 - Detailed error reporting with helpful guidance
 - Security mode indicators in all responses
 
@@ -158,16 +167,166 @@ dotnet run
 
 The server will start and listen for MCP protocol messages via stdio.
 
-## Integration with Claude Desktop
+## Docker Deployment
 
-1. Copy the `claude_desktop_config.json` file to your Claude Desktop configuration directory
-2. Update the connection string in the config file to match your database
-3. Restart Claude Desktop
+The project includes a multi-stage `Dockerfile` and `docker-compose.yml` for containerized deployment.
 
-The configuration file should be placed at:
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Linux**: `~/.config/claude/claude_desktop_config.json`
+### Build
+
+```bash
+docker build -t sqlserver-mcp .
+```
+
+### Run (SSE mode — default in Docker)
+
+```bash
+docker run -d --name sqlserver-mcp -p 9090:8080 \
+  -e MCP_TRANSPORT=sse \
+  -e SQLSERVER_CONNECTION_STRING="Server=your_server,1433;Database=your_db;User Id=sa;Password=YourPass!;TrustServerCertificate=True;" \
+  sqlserver-mcp
+```
+
+### Run (Stdio mode — for Docker-aware MCP clients)
+
+```bash
+docker run -i --rm \
+  -e MCP_TRANSPORT=stdio \
+  -e SQLSERVER_CONNECTION_STRING="Server=your_server,1433;Database=your_db;User Id=sa;Password=YourPass!;TrustServerCertificate=True;" \
+  sqlserver-mcp
+```
+
+### Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  mcp-server:
+    build: .
+    ports:
+      - "9090:8080"
+    environment:
+      MCP_TRANSPORT: sse
+      SQLSERVER_CONNECTION_STRING: "Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=True;"
+```
+
+```bash
+docker compose up -d
+```
+
+### Verify
+
+```bash
+curl http://localhost:9090/health
+# → {"status":"healthy","transport":"sse","sessions":0}
+```
+
+## Transport Modes
+
+The server supports three transport modes, selected via `MCP_TRANSPORT` environment variable:
+
+| Mode | Value | Description | Port |
+|------|-------|-------------|------|
+| **Stdio** | `stdio` (default) | Standard stdin/stdout — local process | N/A |
+| **SSE** | `sse` / `http` | HTTP Server-Sent Events — multi-session | `MCP_PORT` (8080) |
+| **TCP** | `tcp` | Raw TCP socket — single client | `MCP_PORT` (8080) |
+
+### SSE Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/sse` | Establish SSE connection (returns session ID via `endpoint` event) |
+| `POST` | `/message?sessionId=<id>` | Send JSON-RPC messages for a session |
+| `GET` | `/health` | Health check (returns session count) |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio`, `sse`, `http`, `tcp` |
+| `MCP_PORT` | `8080` | Port for TCP/SSE modes |
+| `MCP_SERVER_NAME` | `SQL Server MCP` | Display name in responses |
+| `MCP_ENVIRONMENT` | `unknown` | Environment label in responses |
+| `SQLSERVER_CONNECTION_STRING` | localhost fallback | Database connection string |
+| `SQLSERVER_COMMAND_TIMEOUT` | `30` | Query timeout in seconds |
+| `CACHE_TTL_METADATA_SECONDS` | `300` | Metadata cache TTL |
+| `CACHE_TTL_SCHEMA_SECONDS` | `600` | Schema cache TTL |
+| `CACHE_TTL_PROCEDURE_SECONDS` | `300` | Procedure cache TTL |
+
+## Integration with AI Agents
+
+Config files for each client are in the `config-samples/` directory and pre-configured in the project:
+
+### Kilo (`.kilo/kilo.jsonc`)
+
+```jsonc
+{
+  "mcp": {
+    "sqlserver": {
+      "type": "remote",
+      "url": "http://localhost:9090/sse",
+      "enabled": true,
+      "timeout": 60000
+    }
+  },
+  "permission": {
+    "sqlserver_*": "allow"
+  }
+}
+```
+
+### VS Code (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "sqlserver-sse": {
+      "type": "sse",
+      "url": "http://localhost:9090/sse"
+    }
+  }
+}
+```
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+```json
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "MCP_TRANSPORT=stdio",
+        "-e", "SQLSERVER_CONNECTION_STRING=Server=host.docker.internal,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=True;",
+        "sqlserver-mcp"
+      ]
+    }
+  }
+}
+```
+
+### Cursor / Windsurf
+
+```json
+{
+  "mcpServers": {
+    "sqlserver": {
+      "command": "dotnet",
+      "args": ["run", "--project", "SqlServerMcpServer"],
+      "env": {
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=master;User Id=sa;Password=YourPass!;TrustServerCertificate=true;"
+      },
+      "autoApprove": [
+        "GetConnections", "SwitchConnection", "GetServerHealth",
+        "GetCurrentDatabase", "GetDatabases", "GetTables",
+        "GetTableSchema", "GetStoredProcedures"
+      ]
+    }
+  }
+}
+```
+
+Configuration examples for all clients are in `mcp-config-examples.md`.
 
 ## Available Tools
 
@@ -178,7 +337,7 @@ Get the current database connection info with structured request logging.
 
 **Behavior:**
 - Emits Serilog start/end events with a correlation ID and elapsed time
-- Includes read-only security indicators in the payload
+- Includes security mode indicators in the payload
 
 **Example Usage:**
 ```
@@ -211,11 +370,16 @@ List all databases on this SQL Server instance
 ```
 
 ### 4. ExecuteQuery
-Execute a SQL query on the current database.
+Execute a SQL query on the current database with pagination and metadata.
 
 **Parameters:**
-- `query` (string): The SQL query to execute
- - `maxRows` (int, optional): Requested rows (defaults to 100; clamped to 100)
+- `query` (string): The SQL query to execute (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)
+- `maxRows` (int, optional): Maximum rows to return (default 100, clamped to 1000)
+- `offset` (int, optional): Offset for pagination (default 0)
+- `pageSize` (int, optional): Page size for pagination (default 100, max 1000)
+- `includeStatistics` (bool, optional): Include query execution statistics (default false)
+- `confirmUnsafeOperation` (bool, optional): Confirm execution of DELETE/TRUNCATE operations (default false)
+- `connectionName` (string, optional): Named connection to use (defaults to active connection)
 
 **Example Usage:**
 ```
@@ -223,25 +387,29 @@ Please execute "SELECT TOP 10 * FROM Users ORDER BY CreatedDate DESC" and show m
 ```
 
 Notes:
-- The server enforces a hard cap of 100 rows per query. Any higher request is clamped to 100.
-- The server safely injects `TOP <N>` after the first `SELECT` when absent, and caps an existing `TOP` if it exceeds 100.
+- For SELECT queries, the server safely injects `TOP <N>` after the **outer** `SELECT` when absent (subqueries, CTE bodies, and UNION branches are left untouched), and caps an existing outer `TOP` if it exceeds the effective limit.
+- INSERT/UPDATE execute as written and return `rows_affected`. DELETE/TRUNCATE only execute when `confirmUnsafeOperation=true`; otherwise they are rejected with `security_mode: DML_WITH_CONFIRMATION`.
+- DDL and other dangerous statements (DROP, CREATE, ALTER, MERGE, EXEC, etc.) are always blocked.
 
 ### 5. ReadQuery (SRS)
-Execute a read-only T-SQL query with result formatting, per-call timeout, and parameter binding. Matches the SRS `read_query` specification.
+Execute a T-SQL query with result formatting, per-call timeout, and parameter binding. Matches the SRS `read_query` specification.
 
 **Parameters:**
-- `query` (string, required): T-SQL `SELECT` statement
+- `query` (string, required): T-SQL statement (SELECT, INSERT, UPDATE; DELETE/TRUNCATE require confirmation)
 - `timeout` (int, optional): Per-call timeout in seconds; default 30; clamped 1–300
 - `max_rows` (int, optional): Requested max rows; default 1000; clamped 1–10,000
 - `format` (string, optional): `json` | `csv` | `table` (HTML); default `json`
 - `parameters` (object, optional): Named parameters to bind (e.g., `{ id: 42 }`); keys may include or omit `@`
 - `delimiter` (string, optional): CSV delimiter; default `,`; use `tab` or `\t` for tab
+- `confirm_unsafe_operation` (bool, optional): Confirm execution of DELETE/TRUNCATE operations (default false)
+- `connectionName` (string, optional): Named connection to use (defaults to active connection)
 
 **Behavior:**
-- Enforces read-only validation (SELECT-only, blocks DDL/DML/EXEC and multiple statements)
+- Validates the statement: SELECT/INSERT/UPDATE allowed, DELETE/TRUNCATE gated behind `confirm_unsafe_operation`, DDL/EXEC/multiple statements always blocked
 - Applies per-call timeout if provided; otherwise uses server default
-- Injects or caps `TOP <N>` to respect `max_rows`
-- Returns:
+- For SELECT, injects or caps `TOP <N>` (outer SELECT only) and enforces `max_rows` while reading
+- For INSERT/UPDATE (and confirmed DELETE/TRUNCATE), executes and returns `rows_affected`
+- Returns for SELECT:
   - `json`: array of objects with explicit `null` values
   - `csv`: CSV string with header row and proper quoting
   - `table`: escaped HTML table with headers
@@ -402,10 +570,11 @@ Server=your_server.database.windows.net;Database=YourDatabase;User Id=your_usern
 
 ## Security Considerations
 
-- This server executes SQL queries directly against your database
+- This server executes SQL queries directly against your database and **can modify data** (INSERT/UPDATE always; DELETE/TRUNCATE with confirmation)
+- Use a least-privilege SQL login; grant only the permissions the workload actually needs. Use a read-only login if you never want writes to be possible
 - Ensure proper database permissions are configured
 - Use parameterized queries when possible to prevent SQL injection
-- Consider limiting the database user's permissions to only what's necessary
+- DDL and administrative statements (DROP/CREATE/ALTER/EXEC/etc.) are always blocked, but defense-in-depth at the SQL permission level is still recommended
 - Never expose connection strings with passwords in version control
 
 ## Error Handling
@@ -445,9 +614,11 @@ To test the server locally:
 
 ## Dependencies
 
-- `ModelContextProtocol` (1.2.0) - Official MCP C# SDK
-- `Microsoft.Data.SqlClient` (7.0.0) - SQL Server connectivity
-- `Microsoft.Extensions.Hosting` (10.0.5) - Host infrastructure
+- `ModelContextProtocol` (1.3.0) - Official MCP C# SDK
+- `Microsoft.Data.SqlClient` (7.0.1) - SQL Server connectivity
+- `Microsoft.Extensions.*` - Host/configuration/caching infrastructure (provided by the `net10.0` shared framework)
+- `Serilog` (4.3.1) and sinks - Structured logging
+- `Polly` (8.6.6) - Resilience and transient-fault handling
 
 ## License
 

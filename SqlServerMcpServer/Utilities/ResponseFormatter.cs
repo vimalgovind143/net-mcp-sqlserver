@@ -27,6 +27,7 @@ namespace SqlServerMcpServer.Utilities
                 server_name = SqlConnectionManager.ServerName,
                 environment = SqlConnectionManager.Environment,
                 database = SqlConnectionManager.CurrentDatabase,
+                connection_name = SqlConnectionManager.GetActiveConnectionName(),
                 operation = context.Operation,
                 timestamp = DateTimeOffset.UtcNow,
                 execution_time_ms = executionTimeMs,
@@ -64,11 +65,16 @@ namespace SqlServerMcpServer.Utilities
             List<string> warnings = null, List<string> recommendations = null,
             Dictionary<string, object> metadata = null, string securityMode = "READ_ONLY")
         {
+            var activeConn = SqlConnectionManager.GetActiveConnectionName();
+            var totalConns = SqlConnectionManager.GetConnectionNames().Count;
+
             return new
             {
                 server_name = SqlConnectionManager.ServerName,
                 environment = SqlConnectionManager.Environment,
                 database = SqlConnectionManager.CurrentDatabase,
+                connection_name = activeConn,
+                available_connections = totalConns > 1 ? SqlConnectionManager.GetConnectionNames() : null,
                 operation = operation,
                 timestamp = DateTimeOffset.UtcNow,
                 execution_time_ms = executionTimeMs,

@@ -13,6 +13,35 @@ namespace SqlServerMcpServer
     [McpServerToolType]
     public static class SqlServerTools
     {
+        // ── Multi-instance connection management ─────────────────────────────
+
+        /// <summary>List all configured SQL Server connections with status.</summary>
+        [McpServerTool, Description("List all configured SQL Server connections with their status and which one is currently active")]
+        public static string GetConnections()
+        {
+            return ConnectionManagement.GetConnections();
+        }
+
+        /// <summary>Add a new named SQL Server connection. Tests connectivity before adding.</summary>
+        [McpServerTool, Description("Add a new named SQL Server connection. Connectivity is tested before the connection is registered.")]
+        public static async Task<string> AddConnectionAsync(
+            [Description("Unique name for this connection (e.g. 'prod', 'reporting', 'staging')")] string name,
+            [Description("Full ADO.NET connection string (e.g. Server=myhost;Database=mydb;User Id=sa;Password=...;TrustServerCertificate=true;)")] string connectionString,
+            [Description("Set this connection as the active connection immediately (default: false)")] bool? setAsActive = false)
+        {
+            return await ConnectionManagement.AddConnectionAsync(name, connectionString, setAsActive ?? false);
+        }
+
+        /// <summary>Switch the active SQL Server connection to a different named instance.</summary>
+        [McpServerTool, Description("Switch the active SQL Server connection to a different named instance. All subsequent tool calls will use the new active connection.")]
+        public static string SwitchConnection(
+            [Description("Name of the connection to activate (use GetConnections to list available names)")] string name)
+        {
+            return ConnectionManagement.SwitchConnection(name);
+        }
+
+        // ── Health / Database ─────────────────────────────────────────────────
+
         /// <summary>
         /// Check connection health and server info
         /// </summary>
@@ -79,9 +108,10 @@ namespace SqlServerMcpServer
             [Description("Offset for pagination (default: 0)")] int? offset = 0,
             [Description("Page size for pagination (default: 100, max: 1000)")] int? pageSize = 100,
             [Description("Include query execution statistics (optional, default: false)")] bool includeStatistics = false,
-            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false)
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirmUnsafeOperation = false,
+            [Description("Named connection to use (defaults to active connection)")] string? connectionName = null)
         {
-            return await QueryExecution.ExecuteQueryAsync(query, maxRows, offset, pageSize, includeStatistics, confirmUnsafeOperation);
+            return await QueryExecution.ExecuteQueryAsync(query, maxRows, offset, pageSize, includeStatistics, confirmUnsafeOperation, connectionName);
         }
 
         /// <summary>
@@ -103,9 +133,10 @@ namespace SqlServerMcpServer
             [Description("Result format: json | csv | table (HTML)")] string? format = "json",
             [Description("Named parameters to bind (e.g., { id: 42 })")] Dictionary<string, object>? parameters = null,
             [Description("CSV delimiter (default ','. Use 'tab' or \\t for tab)")] string? delimiter = null,
-            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirm_unsafe_operation = false)
+            [Description("Confirm execution of DELETE/TRUNCATE operations (default: false)")] bool confirm_unsafe_operation = false,
+            [Description("Named connection to use (defaults to active connection)")] string? connectionName = null)
         {
-            return await QueryExecution.ReadQueryAsync(query, timeout, max_rows, format, parameters, delimiter, confirm_unsafe_operation);
+            return await QueryExecution.ReadQueryAsync(query, timeout, max_rows, format, parameters, delimiter, confirm_unsafe_operation, connectionName);
         }
 
         /// <summary>
@@ -123,9 +154,10 @@ namespace SqlServerMcpServer
             [Description("Filter by table name (partial match, optional)")] string? nameFilter = null,
             [Description("Minimum row count filter (optional)")] int? minRowCount = null,
             [Description("Sort by: 'NAME', 'SIZE', or 'ROWS' (default: 'NAME')")] string? sortBy = "NAME",
-            [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC")
+            [Description("Sort order: 'ASC' or 'DESC' (default: 'ASC')")] string? sortOrder = "ASC",
+            [Description("Named connection to use (defaults to active connection)")] string? connectionName = null)
         {
-            return await SchemaInspection.GetTablesAsync(schemaFilter, nameFilter, minRowCount, sortBy, sortOrder);
+            return await SchemaInspection.GetTablesAsync(schemaFilter, nameFilter, minRowCount, sortBy, sortOrder, connectionName);
         }
 
         /// <summary>

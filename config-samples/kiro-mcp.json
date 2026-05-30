@@ -1,0 +1,31 @@
+{
+  "//": "Kiro MCP config. Workspace: .kiro/settings/mcp.json  |  User (global): ~/.kiro/settings/mcp.json",
+  "//build": "Build first: dotnet build -c Debug. The csproj is SelfContained/SingleFile, so the DLL lands under net10.0/win-x64/ (or net10.0/<rid>/ on other OSes).",
+  "mcpServers": {
+    "sqlserver": {
+      "command": "dotnet",
+      "args": [
+        "d:\\GitHub\\net-mcp-sqlserver\\SqlServerMcpServer\\bin\\Debug\\net10.0\\win-x64\\SqlServerMcpServer.dll"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "MCP_SERVER_NAME": "Optimum SQL (local docker)",
+        "MCP_ENVIRONMENT": "development",
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=Optimum_Utilities;User Id=sa;password=YourStrong@Password123;Trusted_Connection=False;MultipleActiveResultSets=true;TrustServerCertificate=True;",
+        "SQLSERVER_COMMAND_TIMEOUT": "30"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "get_connections",
+        "get_server_health",
+        "get_current_database",
+        "get_databases",
+        "get_tables",
+        "get_table_schema",
+        "get_stored_procedures",
+        "get_object_definition",
+        "read_query"
+      ]
+    }
+  }
+}

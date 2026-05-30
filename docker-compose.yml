@@ -1,0 +1,57 @@
+services:
+  # ── MCP SQL Server ───────────────────────────────────────────────────────
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sqlserver-mcp:latest
+    container_name: sqlserver-mcp
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-8080}:8080"
+    environment:
+      MCP_TRANSPORT: "${MCP_TRANSPORT:-sse}"
+      MCP_PORT: "8080"
+      MCP_SERVER_NAME: "${MCP_SERVER_NAME:-SQL Server MCP}"
+      MCP_ENVIRONMENT: "${MCP_ENVIRONMENT:-production}"
+      SQLSERVER_CONNECTION_STRING: "${SQLSERVER_CONNECTION_STRING}"
+      SQLSERVER_COMMAND_TIMEOUT: "${SQLSERVER_COMMAND_TIMEOUT:-30}"
+    # Uncomment to mount a custom appsettings.json.
+    # volumes:
+    #   - ./config-samples/appsettings.json:/app/appsettings.json:ro
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - |
+          if [ "$$MCP_TRANSPORT" = "sse" ] || [ "$$MCP_TRANSPORT" = "http" ]; then
+            curl -fsS http://localhost:$${MCP_PORT:-8080}/health > /dev/null || exit 1
+          else
+            pgrep SqlServerMcpServer > /dev/null || exit 1
+          fi
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── SQL Server (optional, for local dev) ──────────────────────────────────
+  # Uncomment to run a local SQL Server instance alongside the MCP server.
+  # Then set SQLSERVER_CONNECTION_STRING to:
+  #   Server=sqlserver,1433;Database=master;User Id=sa;Password=Your_Str0ng_Pass!;TrustServerCertificate=true;
+  #
+  # sqlserver:
+  #   image: mcr.microsoft.com/mssql/server:2022-latest
+  #   container_name: sqlserver
+  #   restart: unless-stopped
+  #   environment:
+  #     ACCEPT_EULA: "Y"
+  #     MSSQL_SA_PASSWORD: "Your_Str0ng_Pass!"
+  #     MSSQL_PID: "Developer"
+  #   ports:
+  #     - "1433:1433"
+  #   volumes:
+  #     - sqlserver-data:/var/opt/mssql
+
+# volumes:
+#   sqlserver-data:

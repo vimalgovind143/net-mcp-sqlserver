@@ -73,7 +73,7 @@ Each server instance will:
 - Connect to its respective database
 - Show its name and environment in responses
 - Maintain separate database contexts
-- Enforce read-only security independently
+- Apply the same query-validation security independently
 
 ## Example Response
 
@@ -83,12 +83,20 @@ Each server instance will:
   "environment": "production",
   "current_database": "production_db",
   "connection_info": "Connected and ready",
-  "security_mode": "READ_ONLY",
+  "security_mode": "GUARDED_WRITE",
   "allowed_operations": [
-    "SELECT queries only",
-    "Database listing", 
-    "Table schema inspection",
-    "Database switching"
+    "SELECT queries",
+    "INSERT and UPDATE statements",
+    "DELETE and TRUNCATE (require confirm_unsafe_operation=true)",
+    "Database listing and switching",
+    "Table schema inspection"
+  ],
+  "blocked_operations": [
+    "DDL (DROP, CREATE, ALTER)",
+    "MERGE, EXEC/EXECUTE, BULK",
+    "GRANT, REVOKE, DENY",
+    "SELECT INTO",
+    "Multiple statements in one request"
   ]
 }
 ```
@@ -97,7 +105,7 @@ Each server instance will:
 
 1. **Environment Isolation**: Separate connections for dev/staging/prod
 2. **Clear Context**: Always know which environment you're working with
-3. **Security**: Each environment maintains its own read-only restrictions
+3. **Security**: Each environment applies the same query-validation rules independently
 4. **Flexibility**: Easy to add/remove environments as needed
 5. **Audit Trail**: Server name and environment in all responses
 

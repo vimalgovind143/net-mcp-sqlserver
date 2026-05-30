@@ -100,13 +100,22 @@ namespace SqlServerMcpServer.Operations
                     environment = SqlConnectionManager.Environment,
                     current_database = SqlConnectionManager.CurrentDatabase,
                     connection_info = "Connected and ready",
-                    security_mode = "READ_ONLY",
+                    security_mode = "GUARDED_WRITE",
                     allowed_operations = new[]
                     {
-                        "SELECT queries only",
-                        "Database listing",
-                        "Table schema inspection",
-                        "Database switching"
+                        "SELECT queries",
+                        "INSERT and UPDATE statements",
+                        "DELETE and TRUNCATE (require confirm_unsafe_operation=true)",
+                        "Database listing and switching",
+                        "Table schema inspection"
+                    },
+                    blocked_operations = new[]
+                    {
+                        "DDL (DROP, CREATE, ALTER)",
+                        "MERGE, EXEC/EXECUTE, BULK",
+                        "GRANT, REVOKE, DENY",
+                        "SELECT INTO",
+                        "Multiple statements in one request"
                     }
                 };
 

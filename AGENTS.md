@@ -2,11 +2,11 @@
 
 ## Project Overview
 
-This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the official C# SDK. It provides read-only tools for interacting with Microsoft SQL Server databases, designed for integration with AI assistants like Claude Desktop.
+This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the official C# SDK. It provides tools for inspecting and querying Microsoft SQL Server databases, designed for integration with AI assistants like Claude Desktop. Read queries and routine DML (INSERT/UPDATE) run normally, DELETE/TRUNCATE require explicit confirmation, and DDL/administrative statements are always blocked.
 
 ### Core Principles
 
-- **READ-ONLY Security**: All operations enforce SELECT-only access - no data modifications allowed
+- **Guarded Write Security**: SELECT/INSERT/UPDATE allowed; DELETE/TRUNCATE gated behind a confirmation flag; DDL and administrative statements always blocked
 - **Structured Responses**: All responses are JSON-formatted with consistent structure
 - **Comprehensive Error Handling**: Rich error context with troubleshooting steps and suggestions
 - **Caching**: Metadata caching with configurable TTLs for performance
@@ -19,10 +19,10 @@ This is a **Model Context Protocol (MCP) Server** for SQL Server, built with the
 | Component | Technology | Version |
 |-----------|-----------|---------|
 | Runtime | .NET 10.0 | net10.0 |
-| MCP SDK | ModelContextProtocol | 1.2.0 |
-| SQL Client | Microsoft.Data.SqlClient | 7.0.0 |
+| MCP SDK | ModelContextProtocol | 1.3.0 |
+| SQL Client | Microsoft.Data.SqlClient | 7.0.1 |
 | Logging | Serilog | 4.3.1 |
-| Caching | Microsoft.Extensions.Caching.Memory | 10.0.5 |
+| Caching | Microsoft.Extensions.Caching.Memory | net10.0 shared framework |
 | Resilience | Polly | 8.6.6 |
 | Testing | xUnit, Moq, FluentAssertions | Latest |
 
@@ -46,7 +46,7 @@ net-mcp-sqlserver/
 │   │   ├── Diagnostics.cs               # Size, backup, error logs
 │   │   └── CodeGeneration.cs            # C# model class generation
 │   ├── Security/
-│   │   └── QueryValidator.cs            # READ-ONLY enforcement
+│   │   └── QueryValidator.cs            # Query validation (guarded-write enforcement)
 │   ├── Utilities/                       # Shared helpers
 │   │   ├── CacheService.cs              # Memory cache with TTL
 │   │   ├── ResponseFormatter.cs         # JSON response formatting
@@ -141,31 +141,43 @@ catch
 
 ## Security Guidelines
 
-### Validation Flow (QueryValidator.IsReadOnlyQuery)
+### Query Tool Validation Flow (QueryValidator.IsDmlQueryAllowed)
+
+The `ExecuteQuery` and `ReadQuery` tools validate user SQL via `QueryValidator.IsDmlQueryAllowed(query, confirmUnsafeOperation, out blockedOperation)`:
 
 - Strips block/line comments, normalizes whitespace, uppercases the query.
-- Blocks multiple statements (allows only a single trailing semicolon).
-- Blocks dangerous keywords:
-  - **DDL**: CREATE, ALTER, DROP, TRUNCATE
-  - **DML**: INSERT, UPDATE, DELETE, MERGE
-  - **Execution**: EXEC, EXECUTE, BULK
-  - **Permissions**: GRANT, REVOKE, DENY
-  - **System/Config**: USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, SP_CONFIGURE
-  - **Object Creation**: SELECT INTO
-- Requires queries to start with SELECT or CTEs (`WITH ... SELECT`); otherwise blocked as NON_SELECT_STATEMENT.
+- Blocks multiple statements (allows only a single trailing semicolon) → `MULTIPLE_STATEMENTS`.
+- Classifies the query via `ClassifyQuery` and applies these rules:
+  - **SELECT / INSERT / UPDATE**: allowed.
+  - **DELETE / TRUNCATE**: allowed only when `confirmUnsafeOperation=true`; otherwise blocked (`DELETE` / `TRUNCATE`) and reported with `security_mode: DML_WITH_CONFIRMATION`.
+  - **Dangerous (always blocked)**: DROP, CREATE, ALTER, EXEC/EXECUTE, MERGE, BULK, GRANT, REVOKE, DENY, and `SELECT ... INTO` → `DANGEROUS`.
+
+> A stricter `QueryValidator.IsReadOnlyQuery` also exists (SELECT-only, blocks all DML/DDL). It is **not** used by the query tools; it is retained for `PerformanceAnalysis.GetQueryExecutionPlan`, which must stay read-only.
 
 ### Allowed Operations
 
-- SELECT queries (with CTEs via WITH) that do not include blocked operations
+- SELECT queries (with CTEs via WITH)
+- INSERT and UPDATE statements
+- DELETE and TRUNCATE statements (only with `confirmUnsafeOperation=true`)
 - Database listing and switching
 - Schema inspection
 - Table/procedure/view introspection
+
+### Always Blocked
+
+- DDL: DROP, CREATE, ALTER
+- MERGE, EXEC/EXECUTE, BULK
+- Permissions: GRANT, REVOKE, DENY
+- System/Config: USE, SET, DBCC, BACKUP, RESTORE, RECONFIGURE, SP_CONFIGURE (blocked by `IsReadOnlyQuery`)
+- SELECT INTO (object creation)
+- Multiple statements in a single request
 
 ### Query Warnings (QueryValidator.GenerateQueryWarnings)
 
 - Adds advisory warnings (not blockers) when:
   - No WHERE/TOP clause is present (may return large result set)
   - Manual pagination detected (offset provided without OFFSET/FETCH clause)
+  - The query is INSERT/UPDATE (data will be modified) or DELETE/TRUNCATE (data will be permanently deleted)
 
 ---
 
@@ -340,8 +352,10 @@ public static async Task<string> NewToolImplementationAsync(string param)
 ### Modifying Query Validation
 
 Edit `Security/QueryValidator.cs`:
-- `IsReadOnlyQuery()` - Add/modify blocked keywords
-- `GetBlockedOperationMessage()` - Add error messages
+- `ClassifyQuery()` - Adjust how a statement is categorized (ReadOnly/Insert/Update/Delete/Truncate/Dangerous)
+- `IsDmlQueryAllowed()` - Rules used by the query tools (SELECT/INSERT/UPDATE allowed, DELETE/TRUNCATE gated, DDL blocked)
+- `IsReadOnlyQuery()` - Strict SELECT-only validator used by execution-plan analysis; add/modify blocked keywords here
+- `GetBlockedOperationMessage()` - Add error/confirmation messages
 
 ### Adding New Error Codes
 
@@ -377,13 +391,13 @@ dotnet publish -c Release -o publish
 
 ## Important Notes for AI Agents
 
-1. **Never modify data** - This is a READ-ONLY server. Never suggest INSERT/UPDATE/DELETE operations.
+1. **Data can be modified** - SELECT/INSERT/UPDATE execute as written; DELETE/TRUNCATE require `confirmUnsafeOperation=true`; DDL and administrative statements are always blocked. Treat write operations with care and surface the confirmation requirement to users.
 
 2. **Always use ResponseFormatter** - All responses must go through `ResponseFormatter.ToJson()`.
 
 3. **Always handle errors** - Every operation must have try-catch with proper error context creation.
 
-4. **Validate before executing** - Use `QueryValidator.IsReadOnlyQuery()` for any user-provided SQL.
+4. **Validate before executing** - Use `QueryValidator.IsDmlQueryAllowed()` for user-provided SQL in query tools; use `QueryValidator.IsReadOnlyQuery()` where a path must remain strictly read-only (e.g. execution-plan analysis).
 
 5. **Use caching appropriately** - Check `CacheService` for reusable patterns.
 

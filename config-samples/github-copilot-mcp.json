@@ -1,0 +1,20 @@
+{
+  "//": "GitHub Copilot (VS Code agent mode) reads MCP servers from .vscode/mcp.json (workspace) or your user settings.json under 'mcp.servers'. This file shows the .vscode/mcp.json shape.",
+  "servers": {
+    "sqlserver": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "d:\\GitHub\\net-mcp-sqlserver\\SqlServerMcpServer\\bin\\Debug\\net10.0\\win-x64\\SqlServerMcpServer.dll"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "SQLSERVER_CONNECTION_STRING": "Server=localhost,1433;Database=Optimum_Utilities;User Id=sa;password=YourStrong@Password123;Trusted_Connection=False;MultipleActiveResultSets=true;TrustServerCertificate=True;"
+      }
+    },
+    "sqlserver-sse": {
+      "type": "sse",
+      "url": "http://localhost:9090/sse"
+    }
+  }
+}
