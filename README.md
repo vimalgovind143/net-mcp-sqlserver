@@ -577,6 +577,10 @@ Server=your_server.database.windows.net;Database=YourDatabase;User Id=your_usern
 - DDL and administrative statements (DROP/CREATE/ALTER/EXEC/etc.) are always blocked, but defense-in-depth at the SQL permission level is still recommended
 - Never expose connection strings with passwords in version control
 
+For a detailed roadmap covering additional security features, hosted MCP feasibility, token-based authentication, and data tokenization, see:
+
+- [`/plan/security-hosting-tokenization-plan.md`](./plan/security-hosting-tokenization-plan.md)
+
 ## Error Handling
 
 The server returns descriptive error messages for:
